@@ -1,0 +1,12 @@
+# Development dependencies (optional)
+# Include all main requirements
+-r requirements.txt
+
+# Development tools
+flake8==6.1.0          # Code linting
+black==23.11.0         # Code formatting
+isort==5.12.0          # Import sorting
+pytest-cov==4.1.0     # Test coverage
+jupyter==1.0.0         # Jupyter notebooks for experimentation
+ipykernel==6.26.0      # Jupyter kernel
+pre-commit==3.6.0      # Pre-commit hooks 
