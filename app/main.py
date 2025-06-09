@@ -8,6 +8,7 @@ import uvicorn
 from app.core.config import settings
 from app.core.database import create_tables
 from app.api.chat import router as chat_router
+from app.api.llm import router as llm_router
 from app.utils.logging import logger
 from app.tools.vector_store import initialize_sample_documents
 
@@ -60,6 +61,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(chat_router)
+app.include_router(llm_router)
 
 
 @app.get("/")

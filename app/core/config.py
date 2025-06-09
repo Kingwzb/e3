@@ -1,7 +1,7 @@
 """Application configuration management."""
 
 import os
-from typing import Optional
+from typing import Optional, Literal
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -9,9 +9,30 @@ from pydantic import Field
 class Settings(BaseSettings):
     """Application settings."""
     
+    # LLM Provider Configuration
+    llm_provider: Literal["openai", "vertexai"] = Field(default="openai", env="LLM_PROVIDER")
+    
     # OpenAI Configuration
     openai_api_key: str = Field(default="sk-test", env="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4", env="OPENAI_MODEL")
+    
+    # Google Vertex AI Configuration
+    vertexai_project_id: str = Field(default="", env="VERTEXAI_PROJECT_ID")
+    vertexai_location: str = Field(default="us-central1", env="VERTEXAI_LOCATION")
+    vertexai_model: str = Field(default="gemini-2.0-flash-lite-001", env="VERTEXAI_MODEL")
+    google_application_credentials: Optional[str] = Field(default=None, env="GOOGLE_APPLICATION_CREDENTIALS")
+    
+    # Vertex AI Deployment Configuration
+    vertexai_deployment_type: Literal["cloud", "on_premise", "corporate"] = Field(default="cloud", env="VERTEXAI_DEPLOYMENT_TYPE")
+    vertexai_endpoint_url: Optional[str] = Field(default=None, env="VERTEXAI_ENDPOINT_URL")
+    vertexai_api_key: Optional[str] = Field(default=None, env="VERTEXAI_API_KEY")
+    vertexai_auth_method: str = Field(default="default", env="VERTEXAI_AUTH_METHOD")
+    
+    # On-Premise Authentication Configuration
+    vertexai_token_function: Optional[str] = Field(default=None, env="VERTEXAI_TOKEN_FUNCTION")
+    vertexai_token_function_module: Optional[str] = Field(default=None, env="VERTEXAI_TOKEN_FUNCTION_MODULE")
+    vertexai_credentials_function: Optional[str] = Field(default=None, env="VERTEXAI_CREDENTIALS_FUNCTION")
+    vertexai_credentials_function_module: Optional[str] = Field(default=None, env="VERTEXAI_CREDENTIALS_FUNCTION_MODULE")
     
     # Database Configuration
     db_host: str = Field(default="localhost", env="DB_HOST")

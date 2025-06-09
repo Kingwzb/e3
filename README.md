@@ -5,7 +5,7 @@ A FastAPI-based conversational AI system that combines Retrieval Augmented Gener
 ## Tech Stack
 
 - **FastAPI**: REST API endpoints
-- **OpenAI**: LLM for natural language processing
+- **LLM Providers**: OpenAI GPT models and Google Vertex AI (Gemini)
 - **FAISS**: Vector database for embeddings
 - **LangChain & LangGraph**: Agent orchestration and workflow management
 - **PostgreSQL**: Metrics database
@@ -157,12 +157,93 @@ rm -rf venv
 ./setup.sh
 ```
 
+## LLM Provider Configuration
+
+The system supports multiple LLM providers with flexible deployment options that can be configured via environment variables.
+
+### Supported Providers
+
+1. **OpenAI** (default)
+2. **Google Vertex AI** with multiple deployment types
+
+### Configuration
+
+Set the `LLM_PROVIDER` environment variable to switch between providers:
+
+```bash
+# Use OpenAI (default)
+LLM_PROVIDER=openai
+
+# Use Google Vertex AI
+LLM_PROVIDER=vertexai
+```
+
+### OpenAI Configuration
+
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4
+```
+
+### Google Vertex AI Configuration
+
+**Cloud Deployment (Default):**
+```bash
+LLM_PROVIDER=vertexai
+VERTEXAI_PROJECT_ID=your_gcp_project_id
+VERTEXAI_LOCATION=us-central1
+VERTEXAI_MODEL=gemini-2.0-flash-lite-001
+VERTEXAI_DEPLOYMENT_TYPE=cloud
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+```
+
+**Corporate/On-Premise Deployment:**
+```bash
+LLM_PROVIDER=vertexai
+VERTEXAI_PROJECT_ID=your_project_id
+VERTEXAI_LOCATION=your_location
+VERTEXAI_MODEL=gemini-2.0-flash-lite-001
+VERTEXAI_DEPLOYMENT_TYPE=corporate  # or "on_premise"
+VERTEXAI_ENDPOINT_URL=https://your-corporate-gemini-endpoint.com/v1
+VERTEXAI_API_KEY=your_corporate_api_key
+VERTEXAI_AUTH_METHOD=api_key
+```
+
+### Deployment Types
+
+- **`cloud`** - Google Cloud Vertex AI (default)
+- **`corporate`** - Corporate hosted Gemini models
+- **`on_premise`** - On-premise Vertex AI deployment
+
+📋 **For detailed setup instructions, see [VERTEX_AI_SETUP.md](VERTEX_AI_SETUP.md)**
+
+### LLM Management API Endpoints
+
+- `GET /api/llm/provider` - Get current provider information
+- `POST /api/llm/test` - Test LLM connectivity
+- `GET /api/llm/providers` - List available providers
+- `GET /api/llm/config` - Get current configuration
+- `GET /api/llm/health` - LLM service health check
+
+### Testing LLM Connectivity
+
+```bash
+# Test current LLM provider
+curl -X POST "http://localhost:8000/api/llm/test" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello, test connectivity"}'
+
+# Get provider information
+curl "http://localhost:8000/api/llm/provider"
+```
+
 ## API Usage
 
 ### Chat Endpoint
 
 ```bash
-POST /chat
+POST /api/chat
 {
     "message": "What are the latest metrics for user engagement?",
     "conversation_id": "conv_123"
