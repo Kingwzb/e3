@@ -64,7 +64,6 @@ def install_ai_packages():
     ai_packages = [
         "numpy>=1.24.0",
         "openai>=1.3.0",
-        "sentence-transformers>=2.2.0",
         "faiss-cpu>=1.7.0",
     ]
     

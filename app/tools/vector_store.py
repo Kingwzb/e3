@@ -5,24 +5,25 @@ import pickle
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 import faiss
-from sentence_transformers import SentenceTransformer
+import asyncio
 
 from app.core.config import settings
+from app.core.llm import LLMClientFactory
 from app.models.state import RAGResult
 from app.utils.logging import logger
 
 
 class VectorStore:
-    """FAISS vector store for document retrieval."""
+    """FAISS vector store for document retrieval using Vertex AI embeddings."""
     
     def __init__(self):
         self.index_path = settings.faiss_index_path
         self.embeddings_model_name = settings.embeddings_model
-        self.embeddings_model = None
+        self.llm_client = None
         self.index = None
         self.documents = []
         self.metadata = []
-        self.dimension = 384  # Default for all-MiniLM-L6-v2
+        self.dimension = 768  # Default for Vertex AI text-embedding models
         
         # Ensure directory exists
         os.makedirs(self.index_path, exist_ok=True)
@@ -34,15 +35,55 @@ class VectorStore:
         self._load_index()
     
     def _initialize_embeddings_model(self):
-        """Initialize the sentence transformer model."""
+        """Initialize the Vertex AI embedding model."""
         try:
-            self.embeddings_model = SentenceTransformer(self.embeddings_model_name)
-            self.dimension = self.embeddings_model.get_sentence_embedding_dimension()
-            logger.info(f"Initialized embeddings model: {self.embeddings_model_name}")
+            # Create LLM client for embeddings
+            self.llm_client = LLMClientFactory.create_from_settings()
+            
+            # Set dimension based on model
+            if "text-embedding-005" in self.embeddings_model_name:
+                self.dimension = 768
+            elif "text-embedding-004" in self.embeddings_model_name:
+                self.dimension = 768
+            elif "gemini-embedding-001" in self.embeddings_model_name:
+                self.dimension = 768
+            elif "text-multilingual-embedding-002" in self.embeddings_model_name:
+                self.dimension = 768
+            else:
+                # Default dimension for Vertex AI models
+                self.dimension = 768
+                
+            logger.info(f"Initialized Vertex AI embeddings model: {self.embeddings_model_name} with dimension {self.dimension}")
         except Exception as e:
             logger.error(f"Failed to initialize embeddings model: {str(e)}")
             raise
     
+    async def _generate_embeddings(self, texts: List[str]) -> np.ndarray:
+        """Generate embeddings using Vertex AI."""
+        try:
+            # Use the LLM client to generate embeddings
+            embeddings = await self.llm_client.generate_embeddings(texts)
+            return np.array(embeddings, dtype=np.float32)
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings: {str(e)}")
+            raise
+    
+    def _generate_embeddings_sync(self, texts: List[str]) -> np.ndarray:
+        """Synchronous wrapper for embedding generation."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an async context, we need to handle this differently
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self._generate_embeddings(texts))
+                    return future.result()
+            else:
+                return asyncio.run(self._generate_embeddings(texts))
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings synchronously: {str(e)}")
+            raise
+
     def _load_index(self):
         """Load existing FAISS index and metadata."""
         index_file = os.path.join(self.index_path, "index.faiss")
@@ -143,9 +184,9 @@ class VectorStore:
                 logger.warning("No valid documents to add")
                 return
             
-            # Generate embeddings
-            logger.info(f"Generating embeddings for {len(doc_texts)} documents")
-            embeddings = self.embeddings_model.encode(doc_texts, show_progress_bar=True)
+            # Generate embeddings using Vertex AI
+            logger.info(f"Generating embeddings for {len(doc_texts)} documents using Vertex AI")
+            embeddings = self._generate_embeddings_sync(doc_texts)
             
             # Normalize embeddings for cosine similarity
             embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -182,8 +223,8 @@ class VectorStore:
                     confidence_score=0.0
                 )
             
-            # Generate query embedding
-            query_embedding = self.embeddings_model.encode([query])
+            # Generate query embedding using Vertex AI
+            query_embedding = self._generate_embeddings_sync([query])
             query_embedding = query_embedding / np.linalg.norm(query_embedding, axis=1, keepdims=True)
             
             # Search in FAISS index
@@ -203,42 +244,46 @@ class VectorStore:
             # Build context and sources
             contexts = []
             sources = []
+            total_score = 0.0
+            
             for score, idx in valid_results:
                 contexts.append(self.documents[idx])
-                source_info = self.metadata[idx] if idx < len(self.metadata) else {"source": f"doc_{idx}"}
-                sources.append(f"{source_info.get('source', f'doc_{idx}')} (score: {score:.3f})")
+                sources.append({
+                    "content": self.documents[idx][:200] + "..." if len(self.documents[idx]) > 200 else self.documents[idx],
+                    "metadata": self.metadata[idx] if idx < len(self.metadata) else {"source": f"doc_{idx}"},
+                    "score": float(score)
+                })
+                total_score += score
             
             # Combine contexts
-            combined_context = "\n\n---\n\n".join(contexts)
-            
-            # Calculate average confidence score
-            avg_confidence = sum(score for score, _ in valid_results) / len(valid_results)
+            combined_context = "\n\n".join(contexts)
+            avg_confidence = total_score / len(valid_results) if valid_results else 0.0
             
             return RAGResult(
                 context=combined_context,
                 sources=sources,
-                confidence_score=float(avg_confidence)
+                confidence_score=avg_confidence
             )
             
         except Exception as e:
-            logger.error(f"Failed to search vector store: {str(e)}")
+            logger.error(f"Search failed: {str(e)}")
             return RAGResult(
-                context="Error occurred while searching the knowledge base.",
+                context="An error occurred during search.",
                 sources=[],
                 confidence_score=0.0
             )
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get vector store statistics."""
+        """Get statistics about the vector store."""
         return {
             "total_documents": len(self.documents),
             "index_size": self.index.ntotal if self.index else 0,
-            "dimension": self.dimension,
-            "model": self.embeddings_model_name
+            "embedding_dimension": self.dimension,
+            "model_name": self.embeddings_model_name
         }
     
     def clear(self):
-        """Clear all documents from the vector store."""
+        """Clear all documents and reset the index."""
         try:
             self.index = faiss.IndexFlatIP(self.dimension)
             self.documents = []
@@ -250,44 +295,49 @@ class VectorStore:
             raise
     
     def clear_documents(self):
-        """Alias for clear() method for compatibility."""
-        self.clear()
-
-
-# Global vector store instance
-vector_store = VectorStore()
+        """Clear all documents but keep the index structure."""
+        try:
+            self.clear()  # Same as clear for now
+        except Exception as e:
+            logger.error(f"Failed to clear documents: {str(e)}")
+            raise
 
 
 def initialize_sample_documents():
-    """Initialize vector store with sample documents for demonstration."""
-    sample_docs = [
-        "User engagement metrics show a 15% increase in daily active users over the past month. This growth is primarily driven by new feature adoption and improved user experience.",
-        "Revenue metrics indicate strong performance with a 22% quarter-over-quarter growth. Key contributors include subscription renewals and new customer acquisitions.",
-        "System performance metrics show 99.9% uptime with average response times under 200ms. Infrastructure optimizations have improved overall system reliability.",
-        "Customer satisfaction scores have improved to 4.8/5.0 based on recent surveys. Users particularly appreciate the new dashboard interface and faster loading times.",
-        "Marketing campaign effectiveness shows a 30% improvement in conversion rates. Social media campaigns and email marketing have been the most successful channels.",
-        "Product usage analytics reveal that users spend an average of 45 minutes per session. Feature adoption rates are highest for analytics dashboards and reporting tools.",
-        "Security metrics show zero critical incidents in the past quarter. Enhanced monitoring and automated threat detection have strengthened our security posture.",
-        "API performance metrics indicate stable usage with 99.95% success rates. Rate limiting and caching optimizations have improved API reliability.",
-        "Mobile app metrics show 40% of traffic comes from mobile devices. User retention on mobile is 20% higher than web platform users.",
-        "Database performance metrics show optimized query times with average execution under 50ms. Recent indexing improvements have enhanced data retrieval efficiency."
+    """Initialize the vector store with sample documents for testing."""
+    vector_store = VectorStore()
+    
+    if vector_store.get_stats()["total_documents"] > 0:
+        logger.info("Vector store already has documents, skipping initialization")
+        return vector_store
+    
+    sample_documents = [
+        {
+            "content": "Python is a high-level programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming.",
+            "metadata": {"source": "python_intro", "topic": "programming"}
+        },
+        {
+            "content": "Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed for every task.",
+            "metadata": {"source": "ml_basics", "topic": "ai"}
+        },
+        {
+            "content": "FastAPI is a modern, fast web framework for building APIs with Python 3.6+ based on standard Python type hints. It's designed to be easy to use and learn.",
+            "metadata": {"source": "fastapi_overview", "topic": "web development"}
+        },
+        {
+            "content": "Vector databases are specialized databases designed to store and query high-dimensional vectors efficiently. They are commonly used in AI applications for similarity search.",
+            "metadata": {"source": "vector_db_intro", "topic": "databases"}
+        },
+        {
+            "content": "Natural Language Processing (NLP) is a field of AI that focuses on the interaction between computers and human language, enabling machines to understand, interpret, and generate human text.",
+            "metadata": {"source": "nlp_overview", "topic": "ai"}
+        }
     ]
     
-    sample_metadata = [
-        {"source": "user_engagement_report", "category": "engagement", "date": "2024-01"},
-        {"source": "revenue_analysis", "category": "revenue", "date": "2024-01"},
-        {"source": "system_performance", "category": "infrastructure", "date": "2024-01"},
-        {"source": "customer_satisfaction", "category": "customer", "date": "2024-01"},
-        {"source": "marketing_report", "category": "marketing", "date": "2024-01"},
-        {"source": "product_analytics", "category": "product", "date": "2024-01"},
-        {"source": "security_report", "category": "security", "date": "2024-01"},
-        {"source": "api_metrics", "category": "api", "date": "2024-01"},
-        {"source": "mobile_analytics", "category": "mobile", "date": "2024-01"},
-        {"source": "database_performance", "category": "database", "date": "2024-01"}
-    ]
+    try:
+        vector_store.add_documents(sample_documents)
+        logger.info("Initialized vector store with sample documents")
+    except Exception as e:
+        logger.error(f"Failed to initialize sample documents: {str(e)}")
     
-    if vector_store.get_stats()["total_documents"] == 0:
-        logger.info("Initializing vector store with sample documents")
-        vector_store.add_documents(sample_docs, sample_metadata)
-    else:
-        logger.info("Vector store already contains documents") 
+    return vector_store 

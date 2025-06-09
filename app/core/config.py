@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     
     # Vector Database Configuration
     faiss_index_path: str = Field(default="./data/faiss_index", env="FAISS_INDEX_PATH")
-    embeddings_model: str = Field(default="all-MiniLM-L6-v2", env="EMBEDDINGS_MODEL")
+    embeddings_model: str = Field(default="text-embedding-005", env="EMBEDDINGS_MODEL")
     
     # Application Configuration
     app_host: str = Field(default="0.0.0.0", env="APP_HOST")
@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
         case_sensitive = False
 
 

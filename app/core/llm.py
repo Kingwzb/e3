@@ -432,17 +432,51 @@ class VertexAIClient(BaseLLMClient):
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for the given texts using Vertex AI."""
         try:
-            # Note: Vertex AI embeddings require a different approach
-            # For now, we'll use a simple fallback or you can implement
-            # the Vertex AI Text Embeddings API
-            logger.warning("Vertex AI embeddings not fully implemented. Consider using sentence-transformers as fallback.")
+            from vertexai.language_models import TextEmbeddingModel
             
-            # Placeholder implementation - in production, use Vertex AI Text Embeddings API
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            embeddings = model.encode(texts)
-            return embeddings.tolist()
+            # Get the embedding model name from settings
+            embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
             
+            # Initialize the embedding model
+            embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
+            
+            # Generate embeddings for all texts
+            embeddings_list = []
+            
+            # Process texts in batches to avoid API limits
+            batch_size = 5  # Vertex AI has rate limits
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                
+                # Generate embeddings for this batch
+                batch_embeddings = []
+                for text in batch_texts:
+                    # Generate embeddings (task_type may not be supported in all versions)
+                    try:
+                        # Try with task_type first for newer models
+                        if embedding_model_name in ['text-embedding-004', 'text-embedding-005', 'gemini-embedding-001']:
+                            embedding = embedding_model.get_embeddings([text], task_type="RETRIEVAL_DOCUMENT")
+                        else:
+                            embedding = embedding_model.get_embeddings([text])
+                    except TypeError:
+                        # Fallback if task_type is not supported
+                        embedding = embedding_model.get_embeddings([text])
+                    
+                    # Extract the vector values
+                    if hasattr(embedding[0], 'values'):
+                        batch_embeddings.append(embedding[0].values)
+                    else:
+                        # Fallback for different API versions
+                        batch_embeddings.append(embedding[0])
+                
+                embeddings_list.extend(batch_embeddings)
+            
+            logger.info(f"Generated {len(embeddings_list)} embeddings using Vertex AI model: {embedding_model_name}")
+            return embeddings_list
+            
+        except ImportError:
+            logger.error("Vertex AI language models not available. Please install google-cloud-aiplatform.")
+            raise Exception("Vertex AI embedding generation failed: Missing dependencies")
         except Exception as e:
             logger.error(f"Vertex AI embeddings error: {str(e)}")
             raise Exception(f"Vertex AI embedding generation failed: {str(e)}")

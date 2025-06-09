@@ -1,6 +1,6 @@
 """LangGraph state models for workflow management."""
 
-from typing import List, Dict, Any, Optional, TypedDict
+from typing import List, Dict, Any, Optional, TypedDict, Union
 from pydantic import BaseModel, Field
 
 from app.models.chat import Message
@@ -26,7 +26,7 @@ class WorkflowState(TypedDict):
 class RAGResult(BaseModel):
     """RAG extraction result."""
     context: str = Field(..., description="Retrieved context from vector database")
-    sources: List[str] = Field(default_factory=list, description="Source documents")
+    sources: List[Union[str, Dict[str, Any]]] = Field(default_factory=list, description="Source documents with metadata")
     confidence_score: float = Field(default=0.0, description="Confidence score")
 
 
