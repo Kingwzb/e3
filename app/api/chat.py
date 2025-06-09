@@ -8,6 +8,7 @@ from app.models.chat import ChatRequest, ChatResponse
 from app.workflows.chat_workflow import chat_workflow_manager
 from app.core.database import get_db
 from app.utils.logging import logger
+from app.tools.vector_store import get_vector_store
 
 # Create router
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -85,10 +86,8 @@ async def get_chat_stats() -> Dict[str, Any]:
     Get statistics about the chat service.
     """
     try:
-        from app.tools.vector_store import vector_store
-        
         # Get vector store stats
-        vector_stats = vector_store.get_stats()
+        vector_stats = get_vector_store().get_stats()
         
         return {
             "vector_store": vector_stats,

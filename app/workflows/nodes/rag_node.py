@@ -2,7 +2,7 @@
 
 from typing import Dict, Any
 from app.models.state import WorkflowState
-from app.tools.vector_store import vector_store
+from app.tools.vector_store import get_vector_store
 from app.utils.logging import logger
 
 
@@ -19,6 +19,9 @@ async def rag_extraction_node(state: WorkflowState) -> Dict[str, Any]:
         logger.info(f"RAG node processing message for conversation: {state['conversation_id']}")
         
         current_message = state["current_message"]
+        
+        # Get the vector store instance
+        vector_store = get_vector_store()
         
         # Search vector database for relevant context
         rag_result = vector_store.search(
@@ -47,7 +50,7 @@ async def rag_extraction_node(state: WorkflowState) -> Dict[str, Any]:
 def create_rag_node_tools() -> Dict[str, Any]:
     """Create tools and utilities for the RAG node."""
     return {
-        "vector_store": vector_store,
+        "vector_store": get_vector_store(),
         "search_params": {
             "default_k": 5,
             "default_min_score": 0.1,

@@ -98,6 +98,32 @@ Consider the conversation history for context about what metrics might be releva
             
             logger.debug(f"Created {len(tools_for_llm)} LangChain tools for LLM")
             
+            # For Vertex AI compatibility, prioritize tools based on query content
+            if len(tools_for_llm) > 1:
+                # Analyze the current message to determine the most relevant tool
+                message_lower = current_message.lower()
+                
+                # Prioritize tools based on query keywords
+                if any(word in message_lower for word in ['category', 'categories', 'type', 'types']):
+                    # Prioritize category-based queries
+                    category_tools = [t for t in tools_for_llm if 'category' in t['function']['name']]
+                    if category_tools:
+                        tools_for_llm = category_tools + [t for t in tools_for_llm if t not in category_tools]
+                
+                elif any(word in message_lower for word in ['top', 'highest', 'best', 'maximum', 'largest']):
+                    # Prioritize top/ranking queries
+                    top_tools = [t for t in tools_for_llm if 'top' in t['function']['name']]
+                    if top_tools:
+                        tools_for_llm = top_tools + [t for t in tools_for_llm if t not in top_tools]
+                
+                elif any(word in message_lower for word in ['custom', 'specific', 'where', 'select']):
+                    # Prioritize custom query tools
+                    custom_tools = [t for t in tools_for_llm if 'custom' in t['function']['name'] or 'query' in t['function']['name']]
+                    if custom_tools:
+                        tools_for_llm = custom_tools + [t for t in tools_for_llm if t not in custom_tools]
+                
+                logger.debug(f"Reordered tools based on query analysis. Primary tool: {tools_for_llm[0]['function']['name']}")
+            
             # Call LLM with tools
             llm_response = await llm_client.generate_response(
                 messages=messages,

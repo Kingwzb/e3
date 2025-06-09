@@ -376,11 +376,42 @@ class VertexAIClient(BaseLLMClient):
             # Handle tools - Vertex AI has limitations with multiple tools
             vertex_tools = None
             if tools:
-                # For now, limit to single tool to avoid the "Multiple tools" error
-                # This is a Vertex AI limitation that needs to be handled
+                # Vertex AI (Gemini) currently supports only one tool at a time
+                # We'll implement a smart selection strategy instead of just warning
                 if len(tools) > 1:
-                    logger.warning(f"Vertex AI doesn't support multiple tools. Using only the first tool out of {len(tools)}")
-                    tools = tools[:1]
+                    # Strategy 1: Check if all tools are related (same domain) - we could combine them
+                    all_db_tools = all(any(keyword in t.get('function', {}).get('name', '').lower() 
+                                          for keyword in ['query', 'metrics', 'database', 'get_', 'search']) 
+                                      for t in tools)
+                    
+                    if all_db_tools and len(tools) <= 3:
+                        # For a small number of related database tools, create a combined description
+                        # and let the LLM choose which one to use in its response
+                        combined_description = f"Database tools available: {', '.join(t['function']['name'] for t in tools)}. "
+                        combined_description += "Available operations: " + "; ".join(
+                            f"{t['function']['name']}: {t['function'].get('description', 'No description')}" 
+                            for t in tools
+                        )
+                        
+                        # Use the first tool but enhance its description
+                        selected_tool = tools[0].copy()
+                        selected_tool['function']['description'] = combined_description
+                        tool_reason = f"enhanced tool '{selected_tool['function']['name']}' (representing {len(tools)} database tools)"
+                    else:
+                        # Strategy 2: Prefer database/query tools over general tools
+                        db_tools = [t for t in tools if any(keyword in t.get('function', {}).get('name', '').lower() 
+                                                           for keyword in ['query', 'metrics', 'database', 'get_', 'search'])]
+                        
+                        if db_tools:
+                            selected_tool = db_tools[0]  # Use first database-related tool
+                            tool_reason = f"database tool '{selected_tool['function']['name']}'"
+                        else:
+                            # Strategy 3: Use the first tool as fallback
+                            selected_tool = tools[0]
+                            tool_reason = f"first available tool '{selected_tool['function']['name']}'"
+                    
+                    logger.info(f"Vertex AI limitation: Using {tool_reason} from {len(tools)} available tools")
+                    tools = [selected_tool]
                 
                 vertex_tools = self._convert_tools_to_vertex_format(tools)
             

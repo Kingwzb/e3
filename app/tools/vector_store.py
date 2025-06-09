@@ -303,40 +303,92 @@ class VectorStore:
             raise
 
 
+# Global vector store instance for backward compatibility
+# Initialize immediately to ensure it's available
+vector_store = None
+
+def get_vector_store():
+    """Get or create the global vector store instance."""
+    global vector_store
+    if vector_store is None:
+        vector_store = VectorStore()
+    return vector_store
+
+
 def initialize_sample_documents():
-    """Initialize the vector store with sample documents for testing."""
-    vector_store = VectorStore()
+    """Initialize the vector store with actual documentation for testing."""
+    import os
+    global vector_store
+    
+    # Initialize the global vector store
+    vector_store = get_vector_store()
     
     if vector_store.get_stats()["total_documents"] > 0:
         logger.info("Vector store already has documents, skipping initialization")
         return vector_store
     
-    sample_documents = [
-        {
-            "content": "Python is a high-level programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming.",
-            "metadata": {"source": "python_intro", "topic": "programming"}
-        },
-        {
-            "content": "Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed for every task.",
-            "metadata": {"source": "ml_basics", "topic": "ai"}
-        },
-        {
-            "content": "FastAPI is a modern, fast web framework for building APIs with Python 3.6+ based on standard Python type hints. It's designed to be easy to use and learn.",
-            "metadata": {"source": "fastapi_overview", "topic": "web development"}
-        },
-        {
-            "content": "Vector databases are specialized databases designed to store and query high-dimensional vectors efficiently. They are commonly used in AI applications for similarity search.",
-            "metadata": {"source": "vector_db_intro", "topic": "databases"}
-        },
-        {
-            "content": "Natural Language Processing (NLP) is a field of AI that focuses on the interaction between computers and human language, enabling machines to understand, interpret, and generate human text.",
-            "metadata": {"source": "nlp_overview", "topic": "ai"}
-        }
-    ]
+    # Load actual documentation files
+    docs_dir = "data/docs"
+    sample_documents = []
     
     try:
+        if os.path.exists(docs_dir):
+            # Read each documentation file
+            doc_files = [
+                ("system_overview.md", "System overview and platform description"),
+                ("metrics_data_schema.md", "Database schema and metric definitions"),
+                ("api_usage_guide.md", "API usage and integration guide"),
+                ("getting_started.md", "Getting started guide and setup instructions"),
+                ("conversation_history_schema.md", "Conversation data structure and schema"),
+                ("troubleshooting_guide.md", "Troubleshooting guide and common issues")
+            ]
+            
+            for filename, description in doc_files:
+                filepath = os.path.join(docs_dir, filename)
+                if os.path.exists(filepath):
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            sample_documents.append({
+                                "content": content,
+                                "metadata": {
+                                    "source": filename,
+                                    "type": "documentation",
+                                    "description": description
+                                }
+                            })
+                    except Exception as e:
+                        logger.warning(f"Failed to read {filename}: {str(e)}")
+        
+        # If no docs found, use fallback sample data
+        if not sample_documents:
+            logger.warning("No documentation files found, using fallback sample data")
+            sample_documents = [
+                {
+                    "content": "Engagement metrics include daily active users (DAU), session duration, and feature usage rates. DAU measures unique users active in a day. Session duration tracks average time spent per session. Feature usage rate shows percentage of users using specific features.",
+                    "metadata": {"source": "engagement_metrics", "topic": "metrics", "category": "engagement"}
+                },
+                {
+                    "content": "Performance metrics track system and employee performance including response time, uptime percentage, error rate, task completion rate, and throughput. These metrics help identify bottlenecks and optimization opportunities.",
+                    "metadata": {"source": "performance_metrics", "topic": "metrics", "category": "performance"}
+                },
+                {
+                    "content": "Revenue metrics analyze financial performance including monthly revenue, conversion rate, customer lifetime value, revenue per employee, and churn rate. These metrics help measure business impact.",
+                    "metadata": {"source": "revenue_metrics", "topic": "metrics", "category": "revenue"}
+                },
+                {
+                    "content": "Satisfaction metrics monitor customer and employee satisfaction through NPS score, support ratings, employee satisfaction scores, customer satisfaction scores, and retention rates.",
+                    "metadata": {"source": "satisfaction_metrics", "topic": "metrics", "category": "satisfaction"}
+                },
+                {
+                    "content": "The metrics data table stores quantitative metrics with columns: id, metric_name, metric_value, timestamp, category, and meta_data. Categories include engagement, performance, revenue, and satisfaction.",
+                    "metadata": {"source": "metrics_schema", "topic": "database", "category": "schema"}
+                }
+            ]
+        
         vector_store.add_documents(sample_documents)
-        logger.info("Initialized vector store with sample documents")
+        logger.info(f"Initialized vector store with {len(sample_documents)} documents")
+        
     except Exception as e:
         logger.error(f"Failed to initialize sample documents: {str(e)}")
     
