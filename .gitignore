@@ -129,25 +129,6 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# Project Specific
-# Exclude test files that were created during development
-test_*.py
-*_test.py
-comprehensive_test_summary.py
-final_test.py
-quick_verification.py
-simple_metrics_test.py
-test_api_request.py
-test_api_simple.py
-test_conversation_flow.sh
-test_metrics_workflow.py
-test_workflow_direct.py
-test_all_tools_verification.py
-working_metrics_test.py
-
-# Exclude temporary documentation
-data/docs/test_update.md
-
 # Exclude any backup files
 *.bak
 *.backup 
