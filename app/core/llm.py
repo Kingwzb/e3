@@ -238,6 +238,7 @@ class VertexAIClient(BaseLLMClient):
         token_function_module = self.config.config.get("token_function_module")
         credentials_function = self.config.config.get("credentials_function")
         credentials_function_module = self.config.config.get("credentials_function_module")
+        api_transport = self.config.config.get("api_transport")
         
         if not endpoint_url:
             raise ValueError("endpoint_url is required for on-premise deployment")
@@ -314,6 +315,10 @@ class VertexAIClient(BaseLLMClient):
             if credentials:
                 init_kwargs["credentials"] = credentials
                 logger.info("Initializing Vertex AI with custom credentials")
+            
+            if api_transport:
+                init_kwargs["api_transport"] = api_transport
+                logger.info(f"Initializing Vertex AI with custom API transport: {api_transport}")
             
             vertexai.init(**init_kwargs)
             self.model_client = GenerativeModel(self.model)
@@ -643,7 +648,9 @@ class LLMClientFactory:
                 token_function=getattr(settings, 'vertexai_token_function', None),
                 token_function_module=getattr(settings, 'vertexai_token_function_module', None),
                 credentials_function=getattr(settings, 'vertexai_credentials_function', None),
-                credentials_function_module=getattr(settings, 'vertexai_credentials_function_module', None)
+                credentials_function_module=getattr(settings, 'vertexai_credentials_function_module', None),
+                # On-premise transport configuration
+                api_transport=getattr(settings, 'vertexai_api_transport', None)
             )
         else:
             raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

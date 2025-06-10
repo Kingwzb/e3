@@ -208,6 +208,9 @@ VERTEXAI_DEPLOYMENT_TYPE=corporate  # or "on_premise"
 VERTEXAI_ENDPOINT_URL=https://your-corporate-gemini-endpoint.com/v1
 VERTEXAI_API_KEY=your_corporate_api_key
 VERTEXAI_AUTH_METHOD=api_key
+
+# For on-premise deployments that require custom transport
+VERTEXAI_API_TRANSPORT=rest
 ```
 
 ### Deployment Types
@@ -215,6 +218,19 @@ VERTEXAI_AUTH_METHOD=api_key
 - **`cloud`** - Google Cloud Vertex AI (default)
 - **`corporate`** - Corporate hosted Gemini models
 - **`on_premise`** - On-premise Vertex AI deployment
+
+### On-Premise Configuration Options
+
+For on-premise deployments, additional configuration may be required:
+
+**API Transport Configuration:**
+- **`VERTEXAI_API_TRANSPORT`** - Specify the transport method (e.g., `rest`, `grpc`)
+- Required for some on-premise Vertex AI deployments that use custom transport protocols
+
+**Authentication Options:**
+- **Token Functions** - Use in-house authentication libraries
+- **Credentials Functions** - Direct credentials object providers
+- **API Key** - Fallback authentication method
 
 ### LLM Request Metadata
 

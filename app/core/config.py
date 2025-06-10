@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     vertexai_credentials_function: Optional[str] = Field(default=None, env="VERTEXAI_CREDENTIALS_FUNCTION")
     vertexai_credentials_function_module: Optional[str] = Field(default=None, env="VERTEXAI_CREDENTIALS_FUNCTION_MODULE")
     
+    # On-Premise Transport Configuration
+    vertexai_api_transport: Optional[str] = Field(default=None, env="VERTEXAI_API_TRANSPORT")
+    
     # Database Configuration
     db_host: str = Field(default="localhost", env="DB_HOST")
     db_port: int = Field(default=5432, env="DB_PORT")
