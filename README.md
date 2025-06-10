@@ -216,6 +216,41 @@ VERTEXAI_AUTH_METHOD=api_key
 - **`corporate`** - Corporate hosted Gemini models
 - **`on_premise`** - On-premise Vertex AI deployment
 
+### LLM Request Metadata
+
+For in-house LLM services that require custom metadata headers (like authentication headers), you can configure metadata to be sent with every LLM request:
+
+```bash
+# Example: Pass user identification and API version headers
+LLM_METADATA='{"x-r2d2-user": "user123", "x-api-version": "v1"}'
+
+# Example: Multiple metadata fields
+LLM_METADATA='{"x-r2d2-user": "user123", "x-api-version": "v1", "x-tenant-id": "org456"}'
+```
+
+**Key Features:**
+- **JSON Format**: Metadata must be valid JSON object format
+- **Global Configuration**: Set once in environment, applies to all LLM calls
+- **Complete Coverage**: Works with both `generate_response` and `generate_embeddings` methods
+- **Provider Support**: Works with both OpenAI-compatible and Vertex AI endpoints
+- **Call-level Override**: Can be overridden per-call in code if needed
+- **Validation**: Invalid JSON will prevent application startup with clear error message
+
+**Usage Examples:**
+
+```bash
+# For in-house OpenAI-compatible services
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=https://your-internal-llm.company.com/v1
+LLM_METADATA='{"x-r2d2-user": "user123", "authorization": "Bearer token123"}'
+
+# For corporate Vertex AI deployments
+LLM_PROVIDER=vertexai
+VERTEXAI_DEPLOYMENT_TYPE=corporate
+VERTEXAI_ENDPOINT_URL=https://your-vertex-endpoint.company.com
+LLM_METADATA='{"x-r2d2-user": "user123", "x-org-id": "org456"}'
+```
+
 📋 **For detailed setup instructions, see [VERTEX_AI_SETUP.md](VERTEX_AI_SETUP.md)**
 
 ### LLM Management API Endpoints

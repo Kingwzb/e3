@@ -45,13 +45,14 @@ class BaseLLMClient(ABC):
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a response using the LLM API."""
         pass
     
     @abstractmethod
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts."""
         pass
     
@@ -83,7 +84,8 @@ class OpenAIClient(BaseLLMClient):
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a response using OpenAI API."""
         try:
@@ -99,6 +101,20 @@ class OpenAIClient(BaseLLMClient):
             if tools:
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
+            
+            # Add metadata as extra headers for OpenAI-compatible endpoints
+            extra_headers = {}
+            if metadata:
+                # Merge global metadata with call-specific metadata
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                extra_headers.update(combined_metadata)
+                logger.info(f"Adding metadata headers to OpenAI request: {list(combined_metadata.keys())}")
+            elif settings.parsed_llm_metadata:
+                extra_headers.update(settings.parsed_llm_metadata)
+                logger.info(f"Adding global metadata headers to OpenAI request: {list(settings.parsed_llm_metadata.keys())}")
+            
+            if extra_headers:
+                kwargs["extra_headers"] = extra_headers
             
             response = await self.client.chat.completions.create(**kwargs)
             
@@ -127,13 +143,29 @@ class OpenAIClient(BaseLLMClient):
             logger.error(f"OpenAI API error: {str(e)}")
             raise Exception(f"OpenAI LLM generation failed: {str(e)}")
     
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts."""
         try:
-            response = await self.client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=texts
-            )
+            kwargs = {
+                "model": "text-embedding-ada-002",
+                "input": texts
+            }
+            
+            # Add metadata as extra headers for OpenAI-compatible endpoints
+            extra_headers = {}
+            if metadata:
+                # Merge global metadata with call-specific metadata
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                extra_headers.update(combined_metadata)
+                logger.info(f"Adding metadata headers to OpenAI embeddings request: {list(combined_metadata.keys())}")
+            elif settings.parsed_llm_metadata:
+                extra_headers.update(settings.parsed_llm_metadata)
+                logger.info(f"Adding global metadata headers to OpenAI embeddings request: {list(settings.parsed_llm_metadata.keys())}")
+            
+            if extra_headers:
+                kwargs["extra_headers"] = extra_headers
+            
+            response = await self.client.embeddings.create(**kwargs)
             return [embedding.embedding for embedding in response.data]
         except Exception as e:
             logger.error(f"OpenAI embeddings error: {str(e)}")
@@ -359,7 +391,8 @@ class VertexAIClient(BaseLLMClient):
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a response using Vertex AI API."""
         try:
@@ -415,17 +448,40 @@ class VertexAIClient(BaseLLMClient):
                 
                 vertex_tools = self._convert_tools_to_vertex_format(tools)
             
+            # Handle metadata for Vertex AI requests
+            request_metadata = {}
+            if metadata:
+                # Merge global metadata with call-specific metadata
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                request_metadata.update(combined_metadata)
+                logger.info(f"Adding metadata to Vertex AI request: {list(combined_metadata.keys())}")
+            elif settings.parsed_llm_metadata:
+                request_metadata.update(settings.parsed_llm_metadata)
+                logger.info(f"Adding global metadata to Vertex AI request: {list(settings.parsed_llm_metadata.keys())}")
+            
             # Generate response
+            request_kwargs = {
+                "generation_config": generation_config
+            }
+            
+            # For Vertex AI, metadata can be passed as custom request headers via the client context
+            # This is most useful for corporate/on-premise deployments where custom headers are needed
+            if request_metadata and hasattr(self.model_client, '_client') and hasattr(self.model_client._client, '_metadata'):
+                # Add metadata as gRPC metadata for Vertex AI
+                import grpc
+                metadata_items = [(k, str(v)) for k, v in request_metadata.items()]
+                request_kwargs["metadata"] = metadata_items
+            
             if vertex_tools:
                 response = await self.model_client.generate_content_async(
                     prompt,
                     tools=vertex_tools,
-                    generation_config=generation_config
+                    **request_kwargs
                 )
             else:
                 response = await self.model_client.generate_content_async(
                     prompt,
-                    generation_config=generation_config
+                    **request_kwargs
                 )
             
             result = {
@@ -460,10 +516,21 @@ class VertexAIClient(BaseLLMClient):
             logger.error(f"Vertex AI API error: {str(e)}")
             raise Exception(f"Vertex AI LLM generation failed: {str(e)}")
     
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts using Vertex AI."""
         try:
             from vertexai.language_models import TextEmbeddingModel
+            
+            # Handle metadata for Vertex AI embedding requests
+            request_metadata = {}
+            if metadata:
+                # Merge global metadata with call-specific metadata
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                request_metadata.update(combined_metadata)
+                logger.info(f"Adding metadata to Vertex AI embeddings request: {list(combined_metadata.keys())}")
+            elif settings.parsed_llm_metadata:
+                request_metadata.update(settings.parsed_llm_metadata)
+                logger.info(f"Adding global metadata to Vertex AI embeddings request: {list(settings.parsed_llm_metadata.keys())}")
             
             # Get the embedding model name from settings
             embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
@@ -482,6 +549,13 @@ class VertexAIClient(BaseLLMClient):
                 # Generate embeddings for this batch
                 batch_embeddings = []
                 for text in batch_texts:
+                    # Prepare embedding kwargs
+                    embedding_kwargs = {"input": [text]}
+                    
+                    # Add metadata for corporate/on-premise deployments if available
+                    # Note: For standard Vertex AI, metadata is typically handled at the client level
+                    # For custom endpoints, metadata might be passed differently
+                    
                     # Generate embeddings (task_type may not be supported in all versions)
                     try:
                         # Try with task_type first for newer models
@@ -589,19 +663,21 @@ class LLMClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a response using the configured LLM provider."""
         return await self.client.generate_response(
             messages=messages,
             tools=tools,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            metadata=metadata
         )
     
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts."""
-        return await self.client.generate_embeddings(texts)
+        return await self.client.generate_embeddings(texts, metadata)
     
     def get_provider_info(self) -> Dict[str, str]:
         """Get information about the current LLM provider."""

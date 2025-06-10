@@ -1,9 +1,10 @@
 """Application configuration management."""
 
 import os
-from typing import Optional, Literal
+import json
+from typing import Optional, Literal, Dict, Any
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, validator
 
 
 class Settings(BaseSettings):
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     
     # LLM Provider Configuration
     llm_provider: Literal["openai", "vertexai"] = Field(default="openai", env="LLM_PROVIDER")
+    
+    # LLM Metadata Configuration (JSON format)
+    llm_metadata: Optional[str] = Field(default=None, env="LLM_METADATA")
     
     # OpenAI Configuration
     openai_api_key: str = Field(default="sk-test", env="OPENAI_API_KEY")
@@ -52,6 +56,26 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    
+    @validator('llm_metadata')
+    def validate_llm_metadata(cls, v):
+        """Validate and parse LLM metadata JSON."""
+        if v is None:
+            return None
+        try:
+            parsed = json.loads(v)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM metadata must be a JSON object")
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in LLM_METADATA: {e}")
+    
+    @property
+    def parsed_llm_metadata(self) -> Dict[str, Any]:
+        """Get parsed LLM metadata as a dictionary."""
+        if self.llm_metadata is None:
+            return {}
+        return self.llm_metadata if isinstance(self.llm_metadata, dict) else {}
     
     @property
     def database_url(self) -> str:
