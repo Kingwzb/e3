@@ -97,6 +97,7 @@ Consider the conversation history for context about what metrics might be releva
                 tools_for_llm.append(tool_schema)
             
             logger.debug(f"Created {len(tools_for_llm)} LangChain tools for LLM")
+            logger.info(f"Available tools for LLM: {[tool['function']['name'] for tool in tools_for_llm]}")
             
             # For Vertex AI compatibility, prioritize tools based on query content
             if len(tools_for_llm) > 1:
@@ -152,6 +153,7 @@ Consider the conversation history for context about what metrics might be releva
                             if isinstance(function_args, str):
                                 function_args = json.loads(function_args)
                             
+                            logger.info(f"Tool '{function_name}' found and executing with args: {function_args}")
                             result = await langchain_tool._arun(**function_args)
                             
                             metrics_data[function_name] = {
@@ -167,14 +169,21 @@ Consider the conversation history for context about what metrics might be releva
                             
                             logger.info(f"Successfully executed LangChain tool {function_name}")
                         else:
-                            logger.warning(f"Unknown LangChain tool: {function_name}")
+                            available_tools = [t.name for t in langchain_tools]
+                            logger.error(f"Tool '{function_name}' not found in available tools: {available_tools}")
+                            logger.error(f"LLM attempted to call undefined tool: {function_name}")
                             metrics_data[function_name] = {
                                 "error": f"Unknown tool: {function_name}",
-                                "arguments": function_args
+                                "arguments": function_args,
+                                "available_tools": available_tools
                             }
                         
                     except Exception as tool_error:
-                        logger.error(f"Error executing LangChain tool {function_name}: {str(tool_error)}")
+                        # Enhanced exception logging with traceback and input parameters
+                        import traceback
+                        logger.error(f"Error executing LangChain tool at line {tool_error.__traceback__.tb_lineno if tool_error.__traceback__ else 'unknown'}: {str(tool_error)}")
+                        logger.error(f"Input parameters - function_name: {function_name}, function_args: {function_args}")
+                        logger.error(f"Full traceback: {traceback.format_exc()}")
                         metrics_data[function_name] = {
                             "error": str(tool_error),
                             "arguments": function_args,
@@ -194,7 +203,11 @@ Consider the conversation history for context about what metrics might be releva
         return result
         
     except Exception as e:
-        logger.error(f"Error in metrics extraction node: {str(e)}")
+        # Enhanced exception logging with traceback and input parameters
+        import traceback
+        logger.error(f"Error in metrics extraction node at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+        logger.error(f"Input parameters - conversation_id: {state.get('conversation_id', 'unknown')}, current_message: {state.get('current_message', 'unknown')[:100]}...")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         # Return only the keys this node modifies, even in error case
         return {
             "error": f"Metrics extraction failed: {str(e)}",

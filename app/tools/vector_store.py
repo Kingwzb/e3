@@ -58,17 +58,21 @@ class VectorStore:
             logger.error(f"Failed to initialize embeddings model: {str(e)}")
             raise
     
-    async def _generate_embeddings(self, texts: List[str]) -> np.ndarray:
+    async def _generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """Generate embeddings using Vertex AI."""
         try:
-            # Use the LLM client to generate embeddings
-            embeddings = await self.llm_client.generate_embeddings(texts)
+            # Use the LLM client to generate embeddings with metadata
+            embeddings = await self.llm_client.generate_embeddings(texts, metadata=metadata)
             return np.array(embeddings, dtype=np.float32)
         except Exception as e:
-            logger.error(f"Failed to generate embeddings: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Failed to generate embeddings at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
     
-    def _generate_embeddings_sync(self, texts: List[str]) -> np.ndarray:
+    def _generate_embeddings_sync(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """Synchronous wrapper for embedding generation."""
         try:
             loop = asyncio.get_event_loop()
@@ -76,12 +80,16 @@ class VectorStore:
                 # If we're already in an async context, we need to handle this differently
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._generate_embeddings(texts))
+                    future = executor.submit(asyncio.run, self._generate_embeddings(texts, metadata))
                     return future.result()
             else:
-                return asyncio.run(self._generate_embeddings(texts))
+                return asyncio.run(self._generate_embeddings(texts, metadata))
         except Exception as e:
-            logger.error(f"Failed to generate embeddings synchronously: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Failed to generate embeddings synchronously at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
     def _load_index(self):
@@ -204,7 +212,11 @@ class VectorStore:
             logger.info(f"Added {len(doc_texts)} documents to vector store")
             
         except Exception as e:
-            logger.error(f"Failed to add documents: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Failed to add documents at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - documents: {len(documents)} items, metadata: {len(metadata) if metadata else 'None'}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
     
     def search(
@@ -266,7 +278,11 @@ class VectorStore:
             )
             
         except Exception as e:
-            logger.error(f"Search failed: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Search failed at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - query: '{query}', k: {k}, min_score: {min_score}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return RAGResult(
                 context="An error occurred during search.",
                 sources=[],
@@ -291,7 +307,11 @@ class VectorStore:
             self._save_index()
             logger.info("Cleared vector store")
         except Exception as e:
-            logger.error(f"Failed to clear vector store: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Failed to clear vector store at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - dimension: {self.dimension}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
     
     def clear_documents(self):
@@ -299,7 +319,11 @@ class VectorStore:
         try:
             self.clear()  # Same as clear for now
         except Exception as e:
-            logger.error(f"Failed to clear documents: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Failed to clear documents at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
+            logger.error(f"Input parameters - none")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
 

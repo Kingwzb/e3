@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Union
 from openai import AsyncOpenAI
@@ -9,6 +10,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part, Tool, FunctionDeclaration
 import google.auth
 from google.auth.exceptions import DefaultCredentialsError
+import traceback
 
 from app.core.config import settings
 from app.utils.logging import logger
@@ -89,10 +91,13 @@ class OpenAIClient(BaseLLMClient):
     ) -> Dict[str, Any]:
         """Generate a response using OpenAI API."""
         try:
+            # Log input parameters for debugging
+            logger.info(f"OpenAI generate_response called with: messages={len(messages)}, tools={len(tools) if tools else 0}, temperature={temperature}, max_tokens={max_tokens}, metadata={list(metadata.keys()) if metadata else 'None'}")
+            
             kwargs = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": temperature,
+                "temperature": temperature
             }
             
             if max_tokens:
@@ -116,36 +121,41 @@ class OpenAIClient(BaseLLMClient):
             if extra_headers:
                 kwargs["extra_headers"] = extra_headers
             
+            # Make the API call
             response = await self.client.chat.completions.create(**kwargs)
             
-            # Extract the response
-            message = response.choices[0].message
-            
+            # Process response
             result = {
-                "content": message.content,
+                "content": response.choices[0].message.content or "",
                 "tool_calls": []
             }
             
             # Handle tool calls if present
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
+            if response.choices[0].message.tool_calls:
+                for tool_call in response.choices[0].message.tool_calls:
                     result["tool_calls"].append({
                         "id": tool_call.id,
                         "function": {
                             "name": tool_call.function.name,
-                            "arguments": json.loads(tool_call.function.arguments)
+                            "arguments": json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
                         }
                     })
             
             return result
             
         except Exception as e:
-            logger.error(f"OpenAI API error: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"OpenAI API error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - messages: {len(messages)} items, tools: {len(tools) if tools else 0}, temperature: {temperature}, max_tokens: {max_tokens}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"OpenAI LLM generation failed: {str(e)}")
     
     async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts."""
         try:
+            # Log input parameters for debugging
+            logger.info(f"OpenAI generate_embeddings called with: texts={len(texts)}, metadata={list(metadata.keys()) if metadata else 'None'}")
+            
             kwargs = {
                 "model": "text-embedding-ada-002",
                 "input": texts
@@ -168,7 +178,10 @@ class OpenAIClient(BaseLLMClient):
             response = await self.client.embeddings.create(**kwargs)
             return [embedding.embedding for embedding in response.data]
         except Exception as e:
-            logger.error(f"OpenAI embeddings error: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"OpenAI embeddings error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"OpenAI embedding generation failed: {str(e)}")
     
     def get_provider_info(self) -> Dict[str, str]:
@@ -212,7 +225,10 @@ class VertexAIClient(BaseLLMClient):
             logger.info(f"Initialized Vertex AI client ({self.deployment_type}) with model: {self.model} in project: {self.project_id}")
             
         except Exception as e:
-            logger.error(f"Vertex AI initialization failed: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Vertex AI initialization failed at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - deployment_type: {self.deployment_type}, model: {self.model}, project_id: {self.project_id}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"Vertex AI initialization failed: {str(e)}")
     
     def _initialize_cloud_client(self):
@@ -226,7 +242,10 @@ class VertexAIClient(BaseLLMClient):
             vertexai.init(project=self.project_id, location=self.location)
             self.model_client = GenerativeModel(self.model)
         except DefaultCredentialsError as e:
-            logger.error(f"Vertex AI authentication failed: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Vertex AI authentication failed at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - project_id: {self.project_id}, location: {self.location}, credentials_path: {self.credentials_path}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"Vertex AI authentication failed. Please check your credentials: {str(e)}")
     
     def _initialize_on_premise_client(self):
@@ -269,13 +288,22 @@ class VertexAIClient(BaseLLMClient):
                         logger.info("Successfully obtained credentials from in-house function")
                         
                 except ImportError as e:
-                    logger.error(f"Failed to import token module {token_function_module}: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Failed to import token module at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - token_function_module: {token_function_module}, token_function: {token_function}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Token function module not found: {token_function_module}")
                 except AttributeError as e:
-                    logger.error(f"Token function {token_function} not found in module {token_function_module}: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Token function not found at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - token_function_module: {token_function_module}, token_function: {token_function}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Token function not found: {token_function}")
                 except Exception as e:
-                    logger.error(f"Error calling token function: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Error calling token function at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - token_function_module: {token_function_module}, token_function: {token_function}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Failed to get token from in-house function: {str(e)}")
             
             elif credentials_function and credentials_function_module:
@@ -291,13 +319,22 @@ class VertexAIClient(BaseLLMClient):
                     logger.info("Successfully obtained credentials from in-house function")
                     
                 except ImportError as e:
-                    logger.error(f"Failed to import credentials module {credentials_function_module}: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Failed to import credentials module at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - credentials_function_module: {credentials_function_module}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Credentials function module not found: {credentials_function_module}")
                 except AttributeError as e:
-                    logger.error(f"Credentials function {credentials_function} not found in module {credentials_function_module}: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Credentials function not found at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - credentials_function_module: {credentials_function_module}, credentials_function: {credentials_function}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Credentials function not found: {credentials_function}")
                 except Exception as e:
-                    logger.error(f"Error calling credentials function: {str(e)}")
+                    # Enhanced exception logging with traceback and input parameters
+                    logger.error(f"Error calling credentials function at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+                    logger.error(f"Input parameters - credentials_function_module: {credentials_function_module}, credentials_function: {credentials_function}")
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
                     raise ValueError(f"Failed to get credentials from in-house function: {str(e)}")
             
             elif api_key:
@@ -317,14 +354,34 @@ class VertexAIClient(BaseLLMClient):
                 logger.info("Initializing Vertex AI with custom credentials")
             
             if api_transport:
-                init_kwargs["api_transport"] = api_transport
-                logger.info(f"Initializing Vertex AI with custom API transport: {api_transport}")
+                # Handle different transport types
+                if isinstance(api_transport, str):
+                    if api_transport.lower() == "rest":
+                        # For REST transport, we can use the default (None) or specify it explicitly
+                        # Some versions might need this to be None to use REST
+                        logger.info(f"Using REST transport for Vertex AI (api_transport=None)")
+                        # Don't set api_transport for REST, let it default
+                    elif api_transport.lower() == "grpc":
+                        # For gRPC transport, pass the string
+                        init_kwargs["api_transport"] = api_transport
+                        logger.info(f"Initializing Vertex AI with gRPC transport: {api_transport}")
+                    else:
+                        # For other string values, try to pass them as-is
+                        init_kwargs["api_transport"] = api_transport
+                        logger.info(f"Initializing Vertex AI with custom API transport: {api_transport}")
+                else:
+                    # If it's not a string (e.g., a transport object), pass it directly
+                    init_kwargs["api_transport"] = api_transport
+                    logger.info(f"Initializing Vertex AI with transport object: {type(api_transport)}")
             
             vertexai.init(**init_kwargs)
             self.model_client = GenerativeModel(self.model)
             
         except Exception as e:
-            logger.error(f"On-premise Vertex AI initialization failed: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"On-premise Vertex AI initialization failed at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - endpoint_url: {endpoint_url}, api_transport: {api_transport}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
     
     def _initialize_corporate_client(self):
@@ -352,7 +409,10 @@ class VertexAIClient(BaseLLMClient):
             self.model_client = GenerativeModel(self.model)
             
         except Exception as e:
-            logger.error(f"Corporate Vertex AI initialization failed: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Corporate Vertex AI initialization failed at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - endpoint_url: {endpoint_url}, auth_method: {auth_method}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
     
     def _convert_messages_to_vertex_format(self, messages: List[Dict[str, str]]) -> str:
@@ -401,6 +461,9 @@ class VertexAIClient(BaseLLMClient):
     ) -> Dict[str, Any]:
         """Generate a response using Vertex AI API."""
         try:
+            # Log input parameters for debugging
+            logger.info(f"Vertex AI generate_response called with: messages={len(messages)}, tools={len(tools) if tools else 0}, temperature={temperature}, max_tokens={max_tokens}, metadata={list(metadata.keys()) if metadata else 'None'}")
+            
             # Convert messages to Vertex AI format
             prompt = self._convert_messages_to_vertex_format(messages)
             
@@ -512,18 +575,42 @@ class VertexAIClient(BaseLLMClient):
                             result["content"] += part.text
             
             # If no function calls, try to get the text response
-            if not result["tool_calls"] and response.text:
-                result["content"] = response.text
+            if not result["tool_calls"]:
+                try:
+                    if hasattr(response, 'text') and response.text:
+                        result["content"] = response.text
+                except ValueError as text_error:
+                    # Handle cases where response.text is not available (e.g., MALFORMED_FUNCTION_CALL)
+                    logger.warning(f"Cannot access response text: {str(text_error)}")
+                    # Check if we have any candidate with finish_reason
+                    if hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'finish_reason'):
+                            if candidate.finish_reason == "MALFORMED_FUNCTION_CALL":
+                                result["content"] = "I encountered an issue with function calling. Let me help you in a different way."
+                                logger.warning(f"MALFORMED_FUNCTION_CALL detected: {getattr(candidate, 'finish_message', 'Unknown reason')}")
+                            else:
+                                result["content"] = f"Response generation was stopped due to: {candidate.finish_reason}"
+                        else:
+                            result["content"] = "I'm unable to generate a response at the moment. Please try rephrasing your question."
+                    else:
+                        result["content"] = "I'm unable to generate a response at the moment. Please try again."
             
             return result
             
         except Exception as e:
-            logger.error(f"Vertex AI API error: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Vertex AI API error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - messages: {len(messages)} items, tools: {len(tools) if tools else 0}, temperature: {temperature}, max_tokens: {max_tokens}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"Vertex AI LLM generation failed: {str(e)}")
     
     async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts using Vertex AI."""
         try:
+            # Log input parameters for debugging
+            logger.info(f"Vertex AI generate_embeddings called with: texts={len(texts)}, metadata={list(metadata.keys()) if metadata else 'None'}")
+            
             from vertexai.language_models import TextEmbeddingModel
             
             # Handle metadata for Vertex AI embedding requests
@@ -540,37 +627,38 @@ class VertexAIClient(BaseLLMClient):
             # Get the embedding model name from settings
             embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
             
-            # Initialize the embedding model
+            # For on-premise deployments with custom transport, we need to ensure
+            # that the TextEmbeddingModel uses the same transport configuration
+            # The vertexai.init() should already be called with the correct transport
+            
+            # Initialize the embedding model - it will use the transport from vertexai.init()
             embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
             
             # Generate embeddings for all texts
             embeddings_list = []
             
             # Process texts in batches to avoid API limits
-            batch_size = 5  # Vertex AI has rate limits
+            batch_size = 5
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i + batch_size]
                 
                 # Generate embeddings for this batch
                 batch_embeddings = []
                 for text in batch_texts:
-                    # Prepare embedding kwargs
-                    embedding_kwargs = {"input": [text]}
-                    
-                    # Add metadata for corporate/on-premise deployments if available
-                    # Note: For standard Vertex AI, metadata is typically handled at the client level
-                    # For custom endpoints, metadata might be passed differently
-                    
                     # Generate embeddings (task_type may not be supported in all versions)
                     try:
-                        # Try with task_type first for newer models
+                        # Try with task_type first for newer models and pass metadata
                         if embedding_model_name in ['text-embedding-004', 'text-embedding-005', 'gemini-embedding-001']:
-                            embedding = embedding_model.get_embeddings([text], task_type="RETRIEVAL_DOCUMENT")
+                            embedding = embedding_model.get_embeddings([text], task_type="RETRIEVAL_DOCUMENT", metadata=request_metadata)
                         else:
-                            embedding = embedding_model.get_embeddings([text])
+                            embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
                     except TypeError:
-                        # Fallback if task_type is not supported
-                        embedding = embedding_model.get_embeddings([text])
+                        # Fallback if task_type or metadata is not supported
+                        try:
+                            embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
+                        except TypeError:
+                            # Final fallback without metadata if not supported
+                            embedding = embedding_model.get_embeddings([text])
                     
                     # Extract the vector values
                     if hasattr(embedding[0], 'values'):
@@ -585,10 +673,16 @@ class VertexAIClient(BaseLLMClient):
             return embeddings_list
             
         except ImportError:
-            logger.error("Vertex AI language models not available. Please install google-cloud-aiplatform.")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Vertex AI language models not available at line {traceback.extract_tb(sys.exc_info()[2])[-1].lineno}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception("Vertex AI embedding generation failed: Missing dependencies")
         except Exception as e:
-            logger.error(f"Vertex AI embeddings error: {str(e)}")
+            # Enhanced exception logging with traceback and input parameters
+            logger.error(f"Vertex AI embeddings error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"Vertex AI embedding generation failed: {str(e)}")
     
     def get_provider_info(self) -> Dict[str, str]:
