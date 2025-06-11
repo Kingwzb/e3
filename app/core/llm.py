@@ -270,6 +270,13 @@ class VertexAIClient(BaseLLMClient):
         credentials_function_module = self.config.config.get("credentials_function_module")
         api_transport = self.config.config.get("api_transport")
         
+        # Debug logging for api_transport extraction
+        logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: Raw config values:")
+        logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: self.config.config={self.config.config}")
+        logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: api_transport from config.get()={repr(api_transport)}")
+        logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: api_transport type={type(api_transport)}")
+        logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: api_transport bool={bool(api_transport)}")
+        
         if not endpoint_url:
             raise ValueError("endpoint_url is required for on-premise deployment")
         
@@ -376,10 +383,9 @@ class VertexAIClient(BaseLLMClient):
                 # Handle different transport types
                 if isinstance(api_transport, str):
                     if api_transport.lower() == "rest":
-                        # For REST transport, we can use the default (None) or specify it explicitly
-                        # Some versions might need this to be None to use REST
-                        logger.info(f"Using REST transport for Vertex AI (api_transport=None)")
-                        # Don't set api_transport for REST, let it default
+                        # For REST transport, pass it explicitly to vertexai.init()
+                        init_kwargs["api_transport"] = "rest"
+                        logger.info(f"Initializing Vertex AI with REST transport: {api_transport}")
                     elif api_transport.lower() == "grpc":
                         # For gRPC transport, pass the string
                         init_kwargs["api_transport"] = api_transport
@@ -392,6 +398,10 @@ class VertexAIClient(BaseLLMClient):
                     # If it's not a string (e.g., a transport object), pass it directly
                     init_kwargs["api_transport"] = api_transport
                     logger.info(f"Initializing Vertex AI with transport object: {type(api_transport)}")
+            else:
+                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: api_transport is falsy, not setting transport parameter")
+                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: api_transport value={repr(api_transport)}")
+                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: This means vertexai.init() will use default transport")
             
             # Log detailed parameters before vertexai.init call
             logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Calling vertexai.init with parameters: {init_kwargs}")
@@ -828,6 +838,13 @@ class LLMClientFactory:
                 api_key=settings.openai_api_key
             )
         elif settings.llm_provider == "vertexai":
+            # Debug logging for api_transport from settings
+            api_transport_value = getattr(settings, 'vertexai_api_transport', None)
+            logger.info(f"VERTEXAI_CONFIG_DEBUG: Reading api_transport from settings")
+            logger.info(f"VERTEXAI_CONFIG_DEBUG: settings.vertexai_api_transport={repr(api_transport_value)}")
+            logger.info(f"VERTEXAI_CONFIG_DEBUG: api_transport type={type(api_transport_value)}")
+            logger.info(f"VERTEXAI_CONFIG_DEBUG: api_transport bool={bool(api_transport_value)}")
+            
             config = LLMClientConfig(
                 provider="vertexai",
                 model=settings.vertexai_model,
@@ -845,7 +862,7 @@ class LLMClientFactory:
                 credentials_function=getattr(settings, 'vertexai_credentials_function', None),
                 credentials_function_module=getattr(settings, 'vertexai_credentials_function_module', None),
                 # On-premise transport configuration
-                api_transport=getattr(settings, 'vertexai_api_transport', None)
+                api_transport=api_transport_value
             )
         else:
             raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

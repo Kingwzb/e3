@@ -56,6 +56,48 @@ async def test_detailed_logging():
         print("✅ Vertex AI client initialized successfully")
         print()
         
+        # Test api_transport configuration specifically
+        print("🧪 Test 1a: Debug API Transport Configuration...")
+        print("Look for 'VERTEXAI_CONFIG_DEBUG' and 'VERTEXAI_INIT_DEBUG' messages:")
+        print("-" * 40)
+        
+        # Test with explicit api_transport value (gRPC)
+        debug_config = LLMClientConfig(
+            provider="vertexai",
+            model=settings.vertexai_model,
+            deployment_type="on_premise",  # Force on_premise to test api_transport
+            project_id=settings.vertexai_project_id,
+            location=settings.vertexai_location,
+            credentials_path=settings.google_application_credentials,
+            endpoint_url="https://test-endpoint.example.com/v1",  # Test endpoint
+            api_transport="grpc"  # Explicit api_transport value
+        )
+        
+        try:
+            debug_client = LLMClientFactory.create_client(debug_config)
+            print("✅ Debug client with explicit gRPC api_transport created")
+        except Exception as e:
+            print(f"⚠️  Debug client creation failed (expected for demo): {str(e)}")
+        
+        # Test with explicit REST transport
+        rest_debug_config = LLMClientConfig(
+            provider="vertexai",
+            model=settings.vertexai_model,
+            deployment_type="on_premise",  # Force on_premise to test api_transport
+            project_id=settings.vertexai_project_id,
+            location=settings.vertexai_location,
+            credentials_path=settings.google_application_credentials,
+            endpoint_url="https://test-endpoint-rest.example.com/v1",  # Test endpoint
+            api_transport="rest"  # Explicit REST api_transport value
+        )
+        
+        try:
+            rest_debug_client = LLMClientFactory.create_client(rest_debug_config)
+            print("✅ Debug client with explicit REST api_transport created")
+        except Exception as e:
+            print(f"⚠️  REST debug client creation failed (expected for demo): {str(e)}")
+        print()
+        
         # Test with custom endpoint to demonstrate location parameter handling
         if getattr(settings, 'vertexai_deployment_type', 'cloud') in ['on_premise', 'corporate']:
             print("🧪 Test 1b: Testing custom endpoint behavior (location parameter handling)...")
@@ -191,6 +233,7 @@ async def test_detailed_logging():
         print("   - VERTEXAI_INIT_CALL: Shows all parameters passed to vertexai.init() with complete values")
         print("     * For cloud deployments: Includes project + location")
         print("     * For custom endpoints: Includes project + api_endpoint (location skipped)")
+        print("     * For transport config: Both 'rest' and 'grpc' are passed explicitly")
         print("   - GET_EMBEDDINGS_CALL: Shows all parameters passed to get_embeddings() with complete metadata values")
         print("   - VECTOR_STORE_EMBEDDINGS_REQUEST: Shows embedding requests from vector store with full metadata")
         print("   - GENERATE_EMBEDDINGS_INPUT: Shows complete input parameters and metadata values")

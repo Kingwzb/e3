@@ -58,9 +58,23 @@ When `VERTEXAI_API_TRANSPORT` is set, the system will:
 
 ## Transport Handling Details
 
-- **`rest`**: Uses the default HTTP/REST transport. The system does not pass the `api_transport` parameter to `vertexai.init()`, allowing Vertex AI to use its default REST transport.
-- **`grpc`**: Explicitly sets gRPC transport by passing `api_transport="grpc"` to `vertexai.init()`.
-- **Other values**: Passed directly to `vertexai.init()` as the `api_transport` parameter.
+### Transport Configuration
+
+The system handles API transport configuration for different deployment scenarios:
+
+- **Default**: If no `api_transport` is specified, Vertex AI uses its default transport
+- **`rest`**: Explicitly sets REST/HTTP transport by passing `api_transport="rest"` to `vertexai.init()`
+- **`grpc`**: Explicitly sets gRPC transport by passing `api_transport="grpc"` to `vertexai.init()`
+- **Other values**: Passed directly to `vertexai.init()` as the `api_transport` parameter
+
+#### Transport Parameter Logic
+
+| VERTEXAI_API_TRANSPORT Value | Passed to vertexai.init() | Use Case |
+|------------------------------|---------------------------|----------|
+| Not set or empty | No transport parameter | Default Vertex AI transport |
+| `rest` | `api_transport="rest"` | Explicit REST/HTTP transport |
+| `grpc` | `api_transport="grpc"` | Explicit gRPC transport |
+| Custom value | `api_transport=custom_value` | Custom transport configuration |
 
 ## Debugging
 
