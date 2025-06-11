@@ -356,9 +356,17 @@ class VertexAIClient(BaseLLMClient):
             # Initialize Vertex AI with custom endpoint and credentials
             init_kwargs = {
                 "project": self.project_id,
-                "location": self.location,
                 "api_endpoint": endpoint_url
             }
+            
+            # Only add location if no custom endpoint is provided (for standard Google Cloud)
+            # Custom endpoints typically have location embedded in the URL
+            if not endpoint_url:
+                init_kwargs["location"] = self.location
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Including location parameter for standard Google Cloud endpoint")
+            else:
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Skipping location parameter due to custom endpoint: {endpoint_url}")
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Custom endpoints have location embedded in URL, location parameter not needed")
             
             if credentials:
                 init_kwargs["credentials"] = credentials
@@ -427,11 +435,20 @@ class VertexAIClient(BaseLLMClient):
             # Log detailed parameters before vertexai.init call
             corporate_init_params = {
                 "project": self.project_id or "corporate-project",
-                "location": self.location or "corporate-location",
                 "api_endpoint": endpoint_url
             }
+            
+            # Only add location if no custom endpoint is provided (for standard Google Cloud)
+            # Custom endpoints typically have location embedded in the URL
+            if not endpoint_url:
+                corporate_init_params["location"] = self.location or "corporate-location"
+                logger.info(f"VERTEXAI_INIT_CALL [Corporate]: Including location parameter for standard Google Cloud endpoint")
+            else:
+                logger.info(f"VERTEXAI_INIT_CALL [Corporate]: Skipping location parameter due to custom endpoint: {endpoint_url}")
+                logger.info(f"VERTEXAI_INIT_CALL [Corporate]: Custom endpoints have location embedded in URL, location parameter not needed")
+            
             logger.info(f"VERTEXAI_INIT_CALL [Corporate]: Calling vertexai.init with parameters: {corporate_init_params}")
-            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: project={self.project_id or 'corporate-project'}, location={self.location or 'corporate-location'}, api_endpoint={endpoint_url}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: project={self.project_id or 'corporate-project'}, location={self.location or 'corporate-location' if not endpoint_url else 'SKIPPED_DUE_TO_CUSTOM_ENDPOINT'}, api_endpoint={endpoint_url}")
             logger.info(f"VERTEXAI_INIT_CALL [Corporate]: endpoint_url={endpoint_url}")
             logger.info(f"VERTEXAI_INIT_CALL [Corporate]: api_key={'SET' if api_key else 'NOT_SET'}")
             logger.info(f"VERTEXAI_INIT_CALL [Corporate]: auth_method={auth_method}")
@@ -440,11 +457,7 @@ class VertexAIClient(BaseLLMClient):
             logger.info(f"VERTEXAI_INIT_CALL [Corporate]: credentials_path={self.credentials_path}")
             
             # Initialize with custom endpoint
-            vertexai.init(
-                project=self.project_id or "corporate-project",
-                location=self.location or "corporate-location",
-                api_endpoint=endpoint_url
-            )
+            vertexai.init(**corporate_init_params)
             self.model_client = GenerativeModel(self.model)
             
         except Exception as e:

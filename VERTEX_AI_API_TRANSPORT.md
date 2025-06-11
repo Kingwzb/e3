@@ -84,4 +84,47 @@ This helps verify that your transport configuration is being applied correctly.
 - `VERTEXAI_ENDPOINT_URL` - The custom endpoint for your on-premise deployment
 - `VERTEXAI_API_KEY` - API key for authentication
 - `VERTEXAI_TOKEN_FUNCTION` - In-house token generation function
-- `VERTEXAI_CREDENTIALS_FUNCTION` - In-house credentials generation function 
+- `VERTEXAI_CREDENTIALS_FUNCTION` - In-house credentials generation function
+
+## Parameter Handling for Custom Endpoints
+
+### Location Parameter Behavior
+
+When using custom Vertex AI endpoints (on-premise or corporate deployments), the `location` parameter is automatically omitted from the `vertexai.init()` call because:
+
+1. **Custom endpoints embed location information** in the URL itself
+2. **Passing location with custom endpoints** can cause conflicts or errors
+3. **Standard Google Cloud endpoints** require the location parameter for regional routing
+
+#### Automatic Location Parameter Logic
+
+| Deployment Type | Endpoint Type | Location Parameter | Reason |
+|----------------|---------------|-------------------|---------|
+| `cloud` | Default Google Cloud | ✅ **Included** | Required for regional routing |
+| `on_premise` | Custom URL provided | ❌ **Skipped** | Location embedded in custom URL |
+| `corporate` | Custom URL provided | ❌ **Skipped** | Location embedded in custom URL |
+| `on_premise` | No custom URL | ✅ **Included** | Falls back to standard Google Cloud |
+
+#### Example Configurations
+
+**Standard Google Cloud (location included):**
+```bash
+VERTEXAI_DEPLOYMENT_TYPE=cloud
+VERTEXAI_PROJECT_ID=my-project
+VERTEXAI_LOCATION=us-central1
+# No VERTEXAI_ENDPOINT_URL
+```
+
+**Custom Endpoint (location skipped):**
+```bash
+VERTEXAI_DEPLOYMENT_TYPE=on_premise
+VERTEXAI_PROJECT_ID=my-project
+VERTEXAI_LOCATION=us-central1  # Used for config but not passed to vertexai.init()
+VERTEXAI_ENDPOINT_URL=https://my-company-vertex.internal.com/v1
+```
+
+The logging will clearly indicate when the location parameter is included or skipped:
+```
+VERTEXAI_INIT_CALL [On-Premise]: Skipping location parameter due to custom endpoint: https://my-company-vertex.internal.com/v1
+VERTEXAI_INIT_CALL [On-Premise]: Custom endpoints have location embedded in URL, location parameter not needed
+``` 

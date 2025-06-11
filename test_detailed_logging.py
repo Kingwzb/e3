@@ -56,6 +56,31 @@ async def test_detailed_logging():
         print("✅ Vertex AI client initialized successfully")
         print()
         
+        # Test with custom endpoint to demonstrate location parameter handling
+        if getattr(settings, 'vertexai_deployment_type', 'cloud') in ['on_premise', 'corporate']:
+            print("🧪 Test 1b: Testing custom endpoint behavior (location parameter handling)...")
+            print("Look for location parameter handling in the logs:")
+            print("-" * 40)
+            
+            # Create a config with custom endpoint to test location parameter behavior
+            custom_config = LLMClientConfig(
+                provider="vertexai",
+                model=settings.vertexai_model,
+                deployment_type=getattr(settings, 'vertexai_deployment_type', 'cloud'),
+                project_id=settings.vertexai_project_id,
+                location=settings.vertexai_location,
+                credentials_path=settings.google_application_credentials,
+                endpoint_url="https://custom-vertex-endpoint.example.com/v1",  # Custom endpoint
+                api_transport=getattr(settings, 'vertexai_api_transport', None)
+            )
+            
+            try:
+                custom_client = LLMClientFactory.create_client(custom_config)
+                print("✅ Custom endpoint client initialized (location parameter should be skipped)")
+            except Exception as e:
+                print(f"⚠️  Custom endpoint test failed (expected for demo): {str(e)}")
+            print()
+        
         print("🧪 Test 2: Generate embeddings directly (will trigger GET_EMBEDDINGS_CALL logging)...")
         print("Look for 'GET_EMBEDDINGS_CALL' in the logs below:")
         print("-" * 40)
@@ -164,6 +189,8 @@ async def test_detailed_logging():
         print()
         print("📝 Summary of logged calls with complete values:")
         print("   - VERTEXAI_INIT_CALL: Shows all parameters passed to vertexai.init() with complete values")
+        print("     * For cloud deployments: Includes project + location")
+        print("     * For custom endpoints: Includes project + api_endpoint (location skipped)")
         print("   - GET_EMBEDDINGS_CALL: Shows all parameters passed to get_embeddings() with complete metadata values")
         print("   - VECTOR_STORE_EMBEDDINGS_REQUEST: Shows embedding requests from vector store with full metadata")
         print("   - GENERATE_EMBEDDINGS_INPUT: Shows complete input parameters and metadata values")
