@@ -264,6 +264,7 @@ class VertexAIClient(BaseLLMClient):
         # Extract on-premise specific configuration
         endpoint_url = self.config.config.get("endpoint_url")
         api_key = self.config.config.get("api_key")
+        auth_method = self.config.config.get("auth_method", "default")
         token_function = self.config.config.get("token_function")
         token_function_module = self.config.config.get("token_function_module")
         credentials_function = self.config.config.get("credentials_function")
