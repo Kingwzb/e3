@@ -273,15 +273,11 @@ class VertexAIClient(BaseLLMClient):
         
         # SSL Configuration
         ssl_verify = self.config.config.get("ssl_verify", True)
-        ssl_cert_path = self.config.config.get("ssl_cert_path")
-        ssl_key_path = self.config.config.get("ssl_key_path")
         ssl_ca_cert_path = self.config.config.get("ssl_ca_cert_path")
         
         # Debug logging for SSL configuration
         logger.info(f"VERTEXAI_SSL_DEBUG [On-Premise]: SSL configuration:")
         logger.info(f"VERTEXAI_SSL_DEBUG [On-Premise]: ssl_verify={ssl_verify}")
-        logger.info(f"VERTEXAI_SSL_DEBUG [On-Premise]: ssl_cert_path={ssl_cert_path}")
-        logger.info(f"VERTEXAI_SSL_DEBUG [On-Premise]: ssl_key_path={ssl_key_path}")
         logger.info(f"VERTEXAI_SSL_DEBUG [On-Premise]: ssl_ca_cert_path={ssl_ca_cert_path}")
         
         # Handle SSL verification settings
@@ -323,18 +319,12 @@ class VertexAIClient(BaseLLMClient):
                         logger.info("Successfully obtained token from in-house function")
                         logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: Created credentials object from token string")
                         logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: credentials type={type(credentials)}")
-                    elif hasattr(token_result, 'before_request') or hasattr(token_result, 'refresh'):
-                        # If it returns credentials object directly with proper attributes
+                    else:
+                        # Use the result directly as credentials object
                         credentials = token_result
                         logger.info("Successfully obtained credentials from in-house function")
                         logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: Using credentials object directly")
                         logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: credentials type={type(credentials)}")
-                    else:
-                        # Invalid return type
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: Invalid token function return type: {type(token_result)}")
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: token_result value: {repr(token_result)}")
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: Expected string token or credentials object with 'before_request' or 'refresh' attributes")
-                        raise ValueError(f"Token function returned invalid type: {type(token_result)}. Expected string or credentials object.")
                     
                 except ImportError as e:
                     # Enhanced exception logging with traceback and input parameters
@@ -366,16 +356,7 @@ class VertexAIClient(BaseLLMClient):
                     # Call the credentials function
                     credentials = get_credentials_func()
                     logger.info("Successfully obtained credentials from in-house function")
-                    
-                    # Validate the credentials object
-                    if hasattr(credentials, 'before_request') or hasattr(credentials, 'refresh'):
-                        logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: Valid credentials object obtained")
-                        logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: credentials type={type(credentials)}")
-                    else:
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: Invalid credentials function return type: {type(credentials)}")
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: credentials value: {repr(credentials)}")
-                        logger.error(f"VERTEXAI_CREDENTIALS_ERROR: Expected credentials object with 'before_request' or 'refresh' attributes")
-                        raise ValueError(f"Credentials function returned invalid type: {type(credentials)}. Expected credentials object.")
+                    logger.info(f"VERTEXAI_CREDENTIALS_DEBUG: credentials type={type(credentials)}")
                     
                 except ImportError as e:
                     # Enhanced exception logging with traceback and input parameters
@@ -417,19 +398,10 @@ class VertexAIClient(BaseLLMClient):
                 logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Custom endpoints have location embedded in URL, location parameter not needed")
             
             if credentials:
-                # Validate credentials object before using it
-                if hasattr(credentials, 'before_request') or hasattr(credentials, 'refresh'):
-                    init_kwargs["credentials"] = credentials
-                    logger.info("Initializing Vertex AI with custom credentials")
-                    logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: credentials type={type(credentials)}")
-                    logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: credentials has before_request={hasattr(credentials, 'before_request')}")
-                    logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: credentials has refresh={hasattr(credentials, 'refresh')}")
-                else:
-                    logger.error(f"VERTEXAI_INIT_ERROR [On-Premise]: Invalid credentials object type: {type(credentials)}")
-                    logger.error(f"VERTEXAI_INIT_ERROR [On-Premise]: credentials value: {repr(credentials)}")
-                    logger.error(f"VERTEXAI_INIT_ERROR [On-Premise]: credentials must have 'before_request' or 'refresh' attribute")
-                    # Don't add invalid credentials to init_kwargs
-                    logger.warning("Skipping invalid credentials - will try without credentials")
+                # Add credentials to initialization parameters
+                init_kwargs["credentials"] = credentials
+                logger.info("Initializing Vertex AI with custom credentials")
+                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: credentials type={type(credentials).__name__ if credentials else None}")
             else:
                 logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: No credentials provided")
             
@@ -484,10 +456,6 @@ class VertexAIClient(BaseLLMClient):
                 **transport_params
             }
             
-            # Add credentials if available and validated
-            if credentials:
-                init_kwargs["credentials"] = credentials
-            
             # Initialize Vertex AI
             try:
                 vertexai.init(**init_kwargs)
@@ -524,24 +492,6 @@ class VertexAIClient(BaseLLMClient):
                             raise retry_e
                     else:
                         logger.error(f"VERTEXAI_SSL_ERROR [On-Premise]: SSL verification already disabled, cannot retry")
-                        raise e
-                        
-                # Handle credentials validation errors
-                elif "'str' object has no attribute 'before_request'" in error_str:
-                    logger.error(f"VERTEXAI_CREDENTIALS_ERROR [On-Premise]: Credentials object validation failed")
-                    logger.error(f"VERTEXAI_CREDENTIALS_ERROR [On-Premise]: This usually means a string was passed as credentials instead of a proper credentials object")
-                    
-                    if credentials:
-                        logger.warning(f"VERTEXAI_CREDENTIALS_RETRY [On-Premise]: Retrying without credentials...")
-                        retry_kwargs = {k: v for k, v in init_kwargs.items() if k != 'credentials'}
-                        try:
-                            vertexai.init(**retry_kwargs)
-                            self.model_client = GenerativeModel(self.model)
-                            logger.warning("VERTEXAI_CREDENTIALS_SUCCESS [On-Premise]: vertexai.init() succeeded without credentials")
-                        except Exception as retry_e:
-                            logger.error(f"VERTEXAI_CREDENTIALS_RETRY_FAILED [On-Premise]: Retry without credentials failed: {str(retry_e)}")
-                            raise retry_e
-                    else:
                         raise e
                         
                 # Handle other errors
@@ -996,8 +946,6 @@ class LLMClientFactory:
                 api_transport=api_transport_value,
                 # SSL configuration
                 ssl_verify=getattr(settings, 'vertexai_ssl_verify', True),
-                ssl_cert_path=getattr(settings, 'vertexai_ssl_cert_path', None),
-                ssl_key_path=getattr(settings, 'vertexai_ssl_key_path', None),
                 ssl_ca_cert_path=getattr(settings, 'vertexai_ssl_ca_cert_path', None)
             )
         else:

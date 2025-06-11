@@ -43,8 +43,6 @@ class Settings(BaseSettings):
     
     # SSL Configuration for On-Premise Deployments
     vertexai_ssl_verify: bool = Field(default=True, env="VERTEXAI_SSL_VERIFY")
-    vertexai_ssl_cert_path: Optional[str] = Field(default=None, env="VERTEXAI_SSL_CERT_PATH")
-    vertexai_ssl_key_path: Optional[str] = Field(default=None, env="VERTEXAI_SSL_KEY_PATH")
     vertexai_ssl_ca_cert_path: Optional[str] = Field(default=None, env="VERTEXAI_SSL_CA_CERT_PATH")
     
     # Database Configuration

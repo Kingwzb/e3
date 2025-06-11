@@ -26,9 +26,7 @@ Add these variables to your `.env` file:
 # SSL Certificate Verification (default: true)
 VERTEXAI_SSL_VERIFY=true
 
-# Custom Certificate Paths (optional)
-VERTEXAI_SSL_CERT_PATH=/path/to/client.crt
-VERTEXAI_SSL_KEY_PATH=/path/to/client.key
+# Path to CA certificate file (fixes certificate verification errors)
 VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca.crt
 ```
 
@@ -37,11 +35,18 @@ VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca.crt
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
 | `VERTEXAI_SSL_VERIFY` | Enable/disable SSL certificate verification | `true` | `false` |
-| `VERTEXAI_SSL_CERT_PATH` | Path to client certificate file | `None` | `/etc/ssl/certs/client.crt` |
-| `VERTEXAI_SSL_KEY_PATH` | Path to client private key file | `None` | `/etc/ssl/private/client.key` |
 | `VERTEXAI_SSL_CA_CERT_PATH` | Path to CA certificate bundle | `None` | `/etc/ssl/certs/ca-bundle.crt` |
 
 ## Solutions by Scenario
+
+### **For Your SSL Certificate Error**
+
+You need the **CA certificate** to verify your server's SSL certificate:
+
+```bash
+# This fixes SSL certificate verification errors
+VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca.crt
+```
 
 ### 1. Development Environment (Quick Fix)
 
@@ -52,40 +57,25 @@ VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca.crt
 VERTEXAI_SSL_VERIFY=false
 ```
 
-This will:
-- Disable SSL certificate verification
-- Suppress SSL warnings
-- Set environment variables to bypass SSL checks
-
 ### 2. Production Environment (Secure)
 
-#### Option A: Using Custom CA Certificate
+#### Option A: Get CA Certificate from IT Department
+Contact your IT department for the corporate CA certificate bundle.
 
-1. Obtain the CA certificate from your IT department or extract it:
+#### Option B: Extract CA Certificate
 ```bash
 openssl s_client -showcerts -connect your-endpoint:443 < /dev/null 2>/dev/null | openssl x509 -outform PEM > ca-cert.pem
 ```
 
-2. Configure the path:
+Then configure it:
 ```bash
 VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca-cert.pem
 ```
 
-#### Option B: System-wide Certificate Configuration
-
-Set system-wide environment variables:
+#### Option C: System-wide Certificate Configuration
 ```bash
 export REQUESTS_CA_BUNDLE=/path/to/ca-cert.pem
 export CURL_CA_BUNDLE=/path/to/ca-cert.pem
-```
-
-#### Option C: Client Certificate Authentication
-
-For mutual TLS authentication:
-```bash
-VERTEXAI_SSL_CERT_PATH=/path/to/client.crt
-VERTEXAI_SSL_KEY_PATH=/path/to/client.key
-VERTEXAI_SSL_CA_CERT_PATH=/path/to/ca.crt
 ```
 
 ### 3. Corporate Environment
@@ -94,7 +84,6 @@ Contact your IT department for:
 - Corporate CA certificate bundle
 - Proxy configuration details
 - Firewall exceptions for your endpoint
-- Client certificates if using mutual TLS
 
 ## Automatic SSL Error Handling
 
@@ -208,16 +197,11 @@ VERTEXAI_SSL_VERIFY=true
 VERTEXAI_SSL_CA_CERT_PATH=/etc/ssl/certs/company-ca.crt
 ```
 
-### Mutual TLS Setup
+### Quick Setup Guide
+
+**For SSL certificate verification errors, you only need:**
 ```bash
-# .env file
-VERTEXAI_ENDPOINT_URL=https://secure-vertex-api.company.com
-VERTEXAI_PROJECT_ID=secure-project
-VERTEXAI_API_TRANSPORT=rest
-VERTEXAI_SSL_VERIFY=true
-VERTEXAI_SSL_CERT_PATH=/etc/ssl/certs/client.crt
-VERTEXAI_SSL_KEY_PATH=/etc/ssl/private/client.key
-VERTEXAI_SSL_CA_CERT_PATH=/etc/ssl/certs/ca.crt
+VERTEXAI_SSL_CA_CERT_PATH=/path/to/your-ca.crt
 ```
 
 ## Support
