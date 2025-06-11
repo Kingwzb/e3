@@ -61,13 +61,24 @@ class VectorStore:
     async def _generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """Generate embeddings using Vertex AI."""
         try:
+            # Log detailed parameters before calling LLM client generate_embeddings
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_REQUEST: Requesting embeddings for {len(texts)} texts")
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_REQUEST: texts_preview={[text[:50] + '...' if len(text) > 50 else text for text in texts[:3]]}{'...' if len(texts) > 3 else ''}")
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_REQUEST: complete_metadata={metadata}")
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_REQUEST: embeddings_model_name={self.embeddings_model_name}")
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_REQUEST: dimension={self.dimension}")
+            
             # Use the LLM client to generate embeddings with metadata
             embeddings = await self.llm_client.generate_embeddings(texts, metadata=metadata)
+            
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_RESPONSE: Generated {len(embeddings)} embeddings")
+            logger.info(f"VECTOR_STORE_EMBEDDINGS_RESPONSE: embedding_dimensions={[len(emb) for emb in embeddings[:3]]}")
+            
             return np.array(embeddings, dtype=np.float32)
         except Exception as e:
             # Enhanced exception logging with traceback and input parameters
             logger.error(f"Failed to generate embeddings at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
@@ -87,7 +98,7 @@ class VectorStore:
         except Exception as e:
             # Enhanced exception logging with traceback and input parameters
             logger.error(f"Failed to generate embeddings synchronously at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
@@ -214,7 +225,8 @@ class VectorStore:
         except Exception as e:
             # Enhanced exception logging with traceback and input parameters
             logger.error(f"Failed to add documents at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
-            logger.error(f"Input parameters - documents: {len(documents)} items, metadata: {len(metadata) if metadata else 'None'}")
+            logger.error(f"Input parameters - documents: {len(documents)} items, metadata: {metadata}")
+            logger.error(f"Document samples: {[str(doc)[:100] + '...' if len(str(doc)) > 100 else str(doc) for doc in documents[:2]]}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise

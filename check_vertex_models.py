@@ -43,6 +43,16 @@ async def test_model_availability(project_id: str, location: str, model: str):
         import vertexai
         from vertexai.generative_models import GenerativeModel
         
+        # Log detailed parameters before vertexai.init call
+        init_params = {
+            "project": project_id,
+            "location": location
+        }
+        logger.info(f"VERTEXAI_INIT_CALL [Test Script]: Calling vertexai.init with parameters: {init_params}")
+        logger.info(f"VERTEXAI_INIT_CALL [Test Script]: project={project_id}, location={location}")
+        logger.info(f"VERTEXAI_INIT_CALL [Test Script]: model_to_test={model}")
+        logger.info(f"VERTEXAI_INIT_CALL [Test Script]: test_purpose=model_availability_check")
+        
         # Initialize Vertex AI for this region
         vertexai.init(project=project_id, location=location)
         

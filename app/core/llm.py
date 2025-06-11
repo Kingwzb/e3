@@ -238,6 +238,17 @@ class VertexAIClient(BaseLLMClient):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_path
         
         try:
+            # Log detailed parameters before vertexai.init call
+            init_params = {
+                "project": self.project_id,
+                "location": self.location
+            }
+            logger.info(f"VERTEXAI_INIT_CALL [Cloud]: Calling vertexai.init with parameters: {init_params}")
+            logger.info(f"VERTEXAI_INIT_CALL [Cloud]: project={self.project_id}, location={self.location}")
+            logger.info(f"VERTEXAI_INIT_CALL [Cloud]: credentials_path={self.credentials_path}")
+            logger.info(f"VERTEXAI_INIT_CALL [Cloud]: deployment_type={self.deployment_type}")
+            logger.info(f"VERTEXAI_INIT_CALL [Cloud]: model={self.model}")
+            
             # Initialize Vertex AI
             vertexai.init(project=self.project_id, location=self.location)
             self.model_client = GenerativeModel(self.model)
@@ -374,6 +385,19 @@ class VertexAIClient(BaseLLMClient):
                     init_kwargs["api_transport"] = api_transport
                     logger.info(f"Initializing Vertex AI with transport object: {type(api_transport)}")
             
+            # Log detailed parameters before vertexai.init call
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Calling vertexai.init with parameters: {init_kwargs}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: project={init_kwargs.get('project')}, location={init_kwargs.get('location')}, api_endpoint={init_kwargs.get('api_endpoint')}, credentials={'SET' if init_kwargs.get('credentials') else 'NOT_SET'}, api_transport={init_kwargs.get('api_transport', 'NOT_SET')}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: endpoint_url={endpoint_url}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: api_key={'SET' if api_key else 'NOT_SET'}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: token_function={token_function}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: token_function_module={token_function_module}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: credentials_function={credentials_function}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: credentials_function_module={credentials_function_module}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: api_transport_config={api_transport}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: deployment_type={self.deployment_type}")
+            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: model={self.model}")
+            
             vertexai.init(**init_kwargs)
             self.model_client = GenerativeModel(self.model)
             
@@ -399,6 +423,21 @@ class VertexAIClient(BaseLLMClient):
                 # Use API key authentication for corporate deployment
                 # This might require custom headers or different initialization
                 os.environ["GOOGLE_API_KEY"] = api_key
+            
+            # Log detailed parameters before vertexai.init call
+            corporate_init_params = {
+                "project": self.project_id or "corporate-project",
+                "location": self.location or "corporate-location",
+                "api_endpoint": endpoint_url
+            }
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: Calling vertexai.init with parameters: {corporate_init_params}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: project={self.project_id or 'corporate-project'}, location={self.location or 'corporate-location'}, api_endpoint={endpoint_url}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: endpoint_url={endpoint_url}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: api_key={'SET' if api_key else 'NOT_SET'}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: auth_method={auth_method}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: deployment_type={self.deployment_type}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: model={self.model}")
+            logger.info(f"VERTEXAI_INIT_CALL [Corporate]: credentials_path={self.credentials_path}")
             
             # Initialize with custom endpoint
             vertexai.init(
@@ -608,8 +647,12 @@ class VertexAIClient(BaseLLMClient):
     async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts using Vertex AI."""
         try:
-            # Log input parameters for debugging
-            logger.info(f"Vertex AI generate_embeddings called with: texts={len(texts)}, metadata={list(metadata.keys()) if metadata else 'None'}")
+            # Log input parameters for debugging with complete values
+            logger.info(f"Vertex AI generate_embeddings called with: texts={len(texts)}, metadata={metadata}")
+            logger.info(f"GENERATE_EMBEDDINGS_INPUT: texts_preview={[text[:100] + '...' if len(text) > 100 else text for text in texts[:3]]}")
+            logger.info(f"GENERATE_EMBEDDINGS_INPUT: complete_metadata={metadata}")
+            logger.info(f"GENERATE_EMBEDDINGS_INPUT: global_metadata={settings.parsed_llm_metadata}")
+            logger.info(f"GENERATE_EMBEDDINGS_INPUT: total_texts_count={len(texts)}")
             
             from vertexai.language_models import TextEmbeddingModel
             
@@ -619,17 +662,19 @@ class VertexAIClient(BaseLLMClient):
                 # Merge global metadata with call-specific metadata
                 combined_metadata = {**settings.parsed_llm_metadata, **metadata}
                 request_metadata.update(combined_metadata)
-                logger.info(f"Adding metadata to Vertex AI embeddings request: {list(combined_metadata.keys())}")
+                logger.info(f"Adding metadata to Vertex AI embeddings request: {combined_metadata}")
+                logger.info(f"METADATA_MERGE: global_metadata={settings.parsed_llm_metadata}")
+                logger.info(f"METADATA_MERGE: call_metadata={metadata}")
+                logger.info(f"METADATA_MERGE: combined_metadata={combined_metadata}")
             elif settings.parsed_llm_metadata:
                 request_metadata.update(settings.parsed_llm_metadata)
-                logger.info(f"Adding global metadata to Vertex AI embeddings request: {list(settings.parsed_llm_metadata.keys())}")
+                logger.info(f"Adding global metadata to Vertex AI embeddings request: {settings.parsed_llm_metadata}")
+                logger.info(f"METADATA_GLOBAL: global_metadata={settings.parsed_llm_metadata}")
             
             # Get the embedding model name from settings
             embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
-            
-            # For on-premise deployments with custom transport, we need to ensure
-            # that the TextEmbeddingModel uses the same transport configuration
-            # The vertexai.init() should already be called with the correct transport
+            logger.info(f"EMBEDDING_MODEL_CONFIG: model_name={embedding_model_name}")
+            logger.info(f"EMBEDDING_MODEL_CONFIG: final_request_metadata={request_metadata}")
             
             # Initialize the embedding model - it will use the transport from vertexai.init()
             embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
@@ -649,15 +694,55 @@ class VertexAIClient(BaseLLMClient):
                     try:
                         # Try with task_type first for newer models and pass metadata
                         if embedding_model_name in ['text-embedding-004', 'text-embedding-005', 'gemini-embedding-001']:
+                            # Log detailed parameters before get_embeddings call
+                            get_embeddings_params = {
+                                "texts": [text],
+                                "task_type": "RETRIEVAL_DOCUMENT",
+                                "metadata": request_metadata
+                            }
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: Calling get_embeddings with parameters: {get_embeddings_params}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: texts=['{text[:50]}...'], task_type='RETRIEVAL_DOCUMENT', metadata={request_metadata}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: embedding_model_name={embedding_model_name}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
+                            
                             embedding = embedding_model.get_embeddings([text], task_type="RETRIEVAL_DOCUMENT", metadata=request_metadata)
                         else:
+                            # Log detailed parameters before get_embeddings call
+                            get_embeddings_params = {
+                                "texts": [text],
+                                "metadata": request_metadata
+                            }
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: Calling get_embeddings with parameters: {get_embeddings_params}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: texts=['{text[:50]}...'], metadata={request_metadata}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: embedding_model_name={embedding_model_name}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
+                            
                             embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
                     except TypeError:
                         # Fallback if task_type or metadata is not supported
                         try:
+                            # Log detailed parameters before get_embeddings call
+                            get_embeddings_params = {
+                                "texts": [text],
+                                "metadata": request_metadata
+                            }
+                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: Calling get_embeddings with parameters: {get_embeddings_params}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: texts=['{text[:50]}...'], metadata={request_metadata}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: embedding_model_name={embedding_model_name}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
+                            
                             embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
                         except TypeError:
                             # Final fallback without metadata if not supported
+                            # Log detailed parameters before get_embeddings call
+                            get_embeddings_params = {
+                                "texts": [text]
+                            }
+                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: Calling get_embeddings with parameters: {get_embeddings_params}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: texts=['{text[:50]}...'], no_metadata=True")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: embedding_model_name={embedding_model_name}")
+                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
+                            
                             embedding = embedding_model.get_embeddings([text])
                     
                     # Extract the vector values
@@ -675,13 +760,16 @@ class VertexAIClient(BaseLLMClient):
         except ImportError:
             # Enhanced exception logging with traceback and input parameters
             logger.error(f"Vertex AI language models not available at line {traceback.extract_tb(sys.exc_info()[2])[-1].lineno}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
+            logger.error(f"Text samples: {[text[:100] + '...' if len(text) > 100 else text for text in texts[:2]]}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception("Vertex AI embedding generation failed: Missing dependencies")
         except Exception as e:
             # Enhanced exception logging with traceback and input parameters
             logger.error(f"Vertex AI embeddings error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
+            logger.error(f"Text samples: {[text[:100] + '...' if len(text) > 100 else text for text in texts[:2]]}")
+            logger.error(f"Embedding model: {getattr(settings, 'embeddings_model', 'text-embedding-005')}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             raise Exception(f"Vertex AI embedding generation failed: {str(e)}")
     
