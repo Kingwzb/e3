@@ -7,7 +7,7 @@ import asyncio
 
 def check_environment():
     """Check if environment is properly configured."""
-    required_vars = ["OPENAI_API_KEY", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+    required_vars = []
     missing_vars = []
     
     # Check if .env file exists

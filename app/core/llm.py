@@ -206,6 +206,7 @@ class VertexAIClient(BaseLLMClient):
         self.project_id = config.config.get("project_id", settings.vertexai_project_id)
         self.location = config.config.get("location", settings.vertexai_location)
         self.credentials_path = config.config.get("credentials_path", settings.google_application_credentials)
+        self.api_transport = config.config.get("api_transport")
         
         # Initialize based on deployment type
         self._initialize_client()
@@ -382,29 +383,6 @@ class VertexAIClient(BaseLLMClient):
                 logger.info("Using API key for on-premise authentication")
                 os.environ["GOOGLE_API_KEY"] = api_key
             
-            # Initialize Vertex AI with custom endpoint and credentials
-            init_kwargs = {
-                "project": self.project_id,
-                "api_endpoint": endpoint_url
-            }
-            
-            # Only add location if no custom endpoint is provided (for standard Google Cloud)
-            # Custom endpoints typically have location embedded in the URL
-            if not endpoint_url:
-                init_kwargs["location"] = self.location
-                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Including location parameter for standard Google Cloud endpoint")
-            else:
-                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Skipping location parameter due to custom endpoint: {endpoint_url}")
-                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Custom endpoints have location embedded in URL, location parameter not needed")
-            
-            if credentials:
-                # Add credentials to initialization parameters
-                init_kwargs["credentials"] = credentials
-                logger.info("Initializing Vertex AI with custom credentials")
-                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: credentials type={type(credentials).__name__ if credentials else None}")
-            else:
-                logger.info(f"VERTEXAI_INIT_DEBUG [On-Premise]: No credentials provided")
-            
             # Set up transport configuration
             transport_params = {}
             if api_transport:
@@ -437,24 +415,20 @@ class VertexAIClient(BaseLLMClient):
                 os.environ["REQUESTS_CA_BUNDLE"] = ssl_ca_cert_path
                 os.environ["CURL_CA_BUNDLE"] = ssl_ca_cert_path
             
-            # Log detailed parameters before vertexai.init call
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Complete initialization parameters:")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: project={self.project_id}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: endpoint_url={endpoint_url}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: credentials={type(credentials).__name__ if credentials else None}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: api_key={'***SET***' if api_key else None}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: auth_method={auth_method}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: token_function={type(token_function).__name__ if token_function else None}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: api_transport={api_transport}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: ssl_verify={ssl_verify}")
-            logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: ssl_ca_cert_path={ssl_ca_cert_path}")
-            
-            # Combine all initialization parameters
-            init_kwargs = {
-                "project": self.project_id,
-                "api_endpoint": endpoint_url,  # Note: it's api_endpoint for custom endpoints
-                **transport_params
-            }
+            # Incrementally build init_kwargs
+            init_kwargs = {}
+            init_kwargs["project"] = self.project_id
+            init_kwargs["api_endpoint"] = endpoint_url
+            init_kwargs.update(transport_params)
+            if credentials:
+                init_kwargs["credentials"] = credentials
+            # Only add location if no custom endpoint is provided (for standard Google Cloud)
+            if not endpoint_url:
+                init_kwargs["location"] = self.location
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Including location parameter for standard Google Cloud endpoint")
+            else:
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Skipping location parameter due to custom endpoint: {endpoint_url}")
+                logger.info(f"VERTEXAI_INIT_CALL [On-Premise]: Custom endpoints have location embedded in URL, location parameter not needed")
             
             # Initialize Vertex AI
             try:
@@ -602,105 +576,53 @@ class VertexAIClient(BaseLLMClient):
         max_tokens: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Generate a response using Vertex AI API."""
+        if self.api_transport == "rest":
+            import asyncio
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._generate_response_sync_impl, messages, tools, temperature, max_tokens, metadata)
+        else:
+            return await self._generate_response_async_impl(messages, tools, temperature, max_tokens, metadata)
+
+    def _generate_response_sync_impl(self, messages, tools, temperature, max_tokens, metadata):
         try:
-            # Log input parameters for debugging
-            logger.info(f"Vertex AI generate_response called with: messages={len(messages)}, tools={len(tools) if tools else 0}, temperature={temperature}, max_tokens={max_tokens}, metadata={list(metadata.keys()) if metadata else 'None'}")
-            
-            # Convert messages to Vertex AI format
+            logger.info(f"Vertex AI (REST) generate_response called with: messages={len(messages)}, tools={len(tools) if tools else 0}, temperature={temperature}, max_tokens={max_tokens}, metadata={metadata}")
             prompt = self._convert_messages_to_vertex_format(messages)
-            
-            # Set up generation config
-            generation_config = {
-                "temperature": temperature,
-            }
+            generation_config = {"temperature": temperature}
             if max_tokens:
                 generation_config["max_output_tokens"] = max_tokens
-            
-            # Handle tools - Vertex AI has limitations with multiple tools
             vertex_tools = None
             if tools:
-                # Vertex AI (Gemini) currently supports only one tool at a time
-                # We'll implement a smart selection strategy instead of just warning
                 if len(tools) > 1:
-                    # Strategy 1: Check if all tools are related (same domain) - we could combine them
-                    all_db_tools = all(any(keyword in t.get('function', {}).get('name', '').lower() 
-                                          for keyword in ['query', 'metrics', 'database', 'get_', 'search']) 
-                                      for t in tools)
-                    
+                    all_db_tools = all(any(keyword in t.get('function', {}).get('name', '').lower() for keyword in ['query', 'metrics', 'database', 'get_', 'search']) for t in tools)
                     if all_db_tools and len(tools) <= 3:
-                        # For a small number of related database tools, create a combined description
-                        # and let the LLM choose which one to use in its response
                         combined_description = f"Database tools available: {', '.join(t['function']['name'] for t in tools)}. "
-                        combined_description += "Available operations: " + "; ".join(
-                            f"{t['function']['name']}: {t['function'].get('description', 'No description')}" 
-                            for t in tools
-                        )
-                        
-                        # Use the first tool but enhance its description
+                        combined_description += "Available operations: " + "; ".join(f"{t['function']['name']}: {t['function'].get('description', 'No description')}" for t in tools)
                         selected_tool = tools[0].copy()
                         selected_tool['function']['description'] = combined_description
                         tool_reason = f"enhanced tool '{selected_tool['function']['name']}' (representing {len(tools)} database tools)"
                     else:
-                        # Strategy 2: Prefer database/query tools over general tools
-                        db_tools = [t for t in tools if any(keyword in t.get('function', {}).get('name', '').lower() 
-                                                           for keyword in ['query', 'metrics', 'database', 'get_', 'search'])]
-                        
+                        db_tools = [t for t in tools if any(keyword in t.get('function', {}).get('name', '').lower() for keyword in ['query', 'metrics', 'database', 'get_', 'search'])]
                         if db_tools:
-                            selected_tool = db_tools[0]  # Use first database-related tool
+                            selected_tool = db_tools[0]
                             tool_reason = f"database tool '{selected_tool['function']['name']}'"
                         else:
-                            # Strategy 3: Use the first tool as fallback
                             selected_tool = tools[0]
                             tool_reason = f"first available tool '{selected_tool['function']['name']}'"
-                    
                     logger.info(f"Vertex AI limitation: Using {tool_reason} from {len(tools)} available tools")
                     tools = [selected_tool]
-                
                 vertex_tools = self._convert_tools_to_vertex_format(tools)
-            
-            # Handle metadata for Vertex AI requests
             request_metadata = {}
             if metadata:
-                # Merge global metadata with call-specific metadata
                 combined_metadata = {**settings.parsed_llm_metadata, **metadata}
                 request_metadata.update(combined_metadata)
-                logger.info(f"Adding metadata to Vertex AI request: {list(combined_metadata.keys())}")
             elif settings.parsed_llm_metadata:
                 request_metadata.update(settings.parsed_llm_metadata)
-                logger.info(f"Adding global metadata to Vertex AI request: {list(settings.parsed_llm_metadata.keys())}")
-            
-            # Generate response
-            request_kwargs = {
-                "generation_config": generation_config
-            }
-            
-            # For Vertex AI, metadata can be passed as custom request headers via the client context
-            # This is most useful for corporate/on-premise deployments where custom headers are needed
-            if request_metadata and hasattr(self.model_client, '_client') and hasattr(self.model_client._client, '_metadata'):
-                # Add metadata as gRPC metadata for Vertex AI
-                import grpc
-                metadata_items = [(k, str(v)) for k, v in request_metadata.items()]
-                request_kwargs["metadata"] = metadata_items
-            
+            request_kwargs = {"generation_config": generation_config}
             if vertex_tools:
-                response = await self.model_client.generate_content_async(
-                    prompt,
-                    tools=vertex_tools,
-                    **request_kwargs
-                )
+                response = self.model_client.generate_content(prompt, tools=vertex_tools, **request_kwargs)
             else:
-                response = await self.model_client.generate_content_async(
-                    prompt,
-                    **request_kwargs
-                )
-            
-            result = {
-                "content": "",
-                "tool_calls": []
-            }
-            
-            # Handle function calls if present
+                response = self.model_client.generate_content(prompt, **request_kwargs)
+            result = {"content": "", "tool_calls": []}
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
@@ -716,16 +638,12 @@ class VertexAIClient(BaseLLMClient):
                             })
                         elif hasattr(part, 'text') and part.text:
                             result["content"] += part.text
-            
-            # If no function calls, try to get the text response
             if not result["tool_calls"]:
                 try:
                     if hasattr(response, 'text') and response.text:
                         result["content"] = response.text
                 except ValueError as text_error:
-                    # Handle cases where response.text is not available (e.g., MALFORMED_FUNCTION_CALL)
                     logger.warning(f"Cannot access response text: {str(text_error)}")
-                    # Check if we have any candidate with finish_reason
                     if hasattr(response, 'candidates') and response.candidates:
                         candidate = response.candidates[0]
                         if hasattr(candidate, 'finish_reason'):
@@ -738,144 +656,185 @@ class VertexAIClient(BaseLLMClient):
                             result["content"] = "I'm unable to generate a response at the moment. Please try rephrasing your question."
                     else:
                         result["content"] = "I'm unable to generate a response at the moment. Please try again."
-            
             return result
-            
         except Exception as e:
-            # Enhanced exception logging with traceback and input parameters
-            logger.error(f"Vertex AI API error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
-            logger.error(f"Input parameters - messages: {len(messages)} items, tools: {len(tools) if tools else 0}, temperature: {temperature}, max_tokens: {max_tokens}, metadata: {list(metadata.keys()) if metadata else 'None'}")
+            import traceback
+            logger.error(f"Vertex AI (REST) response error: {str(e)}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise Exception(f"Vertex AI LLM generation failed: {str(e)}")
+            raise
+
+    async def _generate_response_async_impl(self, messages, tools, temperature, max_tokens, metadata):
+        try:
+            logger.info(f"Vertex AI (gRPC) generate_response called with: messages={len(messages)}, tools={len(tools) if tools else 0}, temperature={temperature}, max_tokens={max_tokens}, metadata={metadata}")
+            prompt = self._convert_messages_to_vertex_format(messages)
+            generation_config = {"temperature": temperature}
+            if max_tokens:
+                generation_config["max_output_tokens"] = max_tokens
+            vertex_tools = None
+            if tools:
+                if len(tools) > 1:
+                    all_db_tools = all(any(keyword in t.get('function', {}).get('name', '').lower() for keyword in ['query', 'metrics', 'database', 'get_', 'search']) for t in tools)
+                    if all_db_tools and len(tools) <= 3:
+                        combined_description = f"Database tools available: {', '.join(t['function']['name'] for t in tools)}. "
+                        combined_description += "Available operations: " + "; ".join(f"{t['function']['name']}: {t['function'].get('description', 'No description')}" for t in tools)
+                        selected_tool = tools[0].copy()
+                        selected_tool['function']['description'] = combined_description
+                        tool_reason = f"enhanced tool '{selected_tool['function']['name']}' (representing {len(tools)} database tools)"
+                    else:
+                        db_tools = [t for t in tools if any(keyword in t.get('function', {}).get('name', '').lower() for keyword in ['query', 'metrics', 'database', 'get_', 'search'])]
+                        if db_tools:
+                            selected_tool = db_tools[0]
+                            tool_reason = f"database tool '{selected_tool['function']['name']}'"
+                        else:
+                            selected_tool = tools[0]
+                            tool_reason = f"first available tool '{selected_tool['function']['name']}'"
+                    logger.info(f"Vertex AI limitation: Using {tool_reason} from {len(tools)} available tools")
+                    tools = [selected_tool]
+                vertex_tools = self._convert_tools_to_vertex_format(tools)
+            request_metadata = {}
+            if metadata:
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                request_metadata.update(combined_metadata)
+            elif settings.parsed_llm_metadata:
+                request_metadata.update(settings.parsed_llm_metadata)
+            request_kwargs = {"generation_config": generation_config}
+            if vertex_tools:
+                response = await self.model_client.generate_content_async(prompt, tools=vertex_tools, **request_kwargs)
+            else:
+                response = await self.model_client.generate_content_async(prompt, **request_kwargs)
+            result = {"content": "", "tool_calls": []}
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'function_call') and part.function_call:
+                            func_call = part.function_call
+                            result["tool_calls"].append({
+                                "id": f"call_{func_call.name}",
+                                "function": {
+                                    "name": func_call.name,
+                                    "arguments": dict(func_call.args) if func_call.args else {}
+                                }
+                            })
+                        elif hasattr(part, 'text') and part.text:
+                            result["content"] += part.text
+            if not result["tool_calls"]:
+                try:
+                    if hasattr(response, 'text') and response.text:
+                        result["content"] = response.text
+                except ValueError as text_error:
+                    logger.warning(f"Cannot access response text: {str(text_error)}")
+                    if hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'finish_reason'):
+                            if candidate.finish_reason == "MALFORMED_FUNCTION_CALL":
+                                result["content"] = "I encountered an issue with function calling. Let me help you in a different way."
+                                logger.warning(f"MALFORMED_FUNCTION_CALL detected: {getattr(candidate, 'finish_message', 'Unknown reason')}")
+                            else:
+                                result["content"] = f"Response generation was stopped due to: {candidate.finish_reason}"
+                        else:
+                            result["content"] = "I'm unable to generate a response at the moment. Please try rephrasing your question."
+                    else:
+                        result["content"] = "I'm unable to generate a response at the moment. Please try again."
+            return result
+        except Exception as e:
+            import traceback
+            logger.error(f"Vertex AI (gRPC) response error: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            raise
     
     async def generate_embeddings(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
         """Generate embeddings for the given texts using Vertex AI."""
+        if self.api_transport == "rest":
+            import asyncio
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._generate_embeddings_sync_impl, texts, metadata)
+        else:
+            return await self._generate_embeddings_async_impl(texts, metadata)
+
+    def _generate_embeddings_sync_impl(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+        """Synchronous implementation for REST transport."""
+        # (Copy the body of the old async generate_embeddings here, but use sync model methods)
         try:
-            # Log input parameters for debugging with complete values
-            logger.info(f"Vertex AI generate_embeddings called with: texts={len(texts)}, metadata={metadata}")
-            logger.info(f"GENERATE_EMBEDDINGS_INPUT: texts_preview={[text[:100] + '...' if len(text) > 100 else text for text in texts[:3]]}")
-            logger.info(f"GENERATE_EMBEDDINGS_INPUT: complete_metadata={metadata}")
-            logger.info(f"GENERATE_EMBEDDINGS_INPUT: global_metadata={settings.parsed_llm_metadata}")
-            logger.info(f"GENERATE_EMBEDDINGS_INPUT: total_texts_count={len(texts)}")
-            
+            logger.info(f"Vertex AI (REST) generate_embeddings called with: texts={len(texts)}, metadata={metadata}")
             from vertexai.language_models import TextEmbeddingModel
-            
-            # Handle metadata for Vertex AI embedding requests
             request_metadata = {}
             if metadata:
-                # Merge global metadata with call-specific metadata
                 combined_metadata = {**settings.parsed_llm_metadata, **metadata}
                 request_metadata.update(combined_metadata)
-                logger.info(f"Adding metadata to Vertex AI embeddings request: {combined_metadata}")
-                logger.info(f"METADATA_MERGE: global_metadata={settings.parsed_llm_metadata}")
-                logger.info(f"METADATA_MERGE: call_metadata={metadata}")
-                logger.info(f"METADATA_MERGE: combined_metadata={combined_metadata}")
             elif settings.parsed_llm_metadata:
                 request_metadata.update(settings.parsed_llm_metadata)
-                logger.info(f"Adding global metadata to Vertex AI embeddings request: {settings.parsed_llm_metadata}")
-                logger.info(f"METADATA_GLOBAL: global_metadata={settings.parsed_llm_metadata}")
-            
-            # Get the embedding model name from settings
             embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
-            logger.info(f"EMBEDDING_MODEL_CONFIG: model_name={embedding_model_name}")
-            logger.info(f"EMBEDDING_MODEL_CONFIG: final_request_metadata={request_metadata}")
-            
-            # Initialize the embedding model - it will use the transport from vertexai.init()
             embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
-            
-            # Generate embeddings for all texts
             embeddings_list = []
-            
-            # Process texts in batches to avoid API limits
             batch_size = 5
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i + batch_size]
-                
-                # Generate embeddings for this batch
                 batch_embeddings = []
                 for text in batch_texts:
-                    # Generate embeddings (task_type may not be supported in all versions)
                     try:
-                        # Try with task_type first for newer models and pass metadata
                         if embedding_model_name in ['text-embedding-004', 'text-embedding-005', 'gemini-embedding-001']:
-                            # Log detailed parameters before get_embeddings call
-                            get_embeddings_params = {
-                                "texts": [text],
-                                "task_type": "RETRIEVAL_DOCUMENT",
-                                "metadata": request_metadata
-                            }
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: Calling get_embeddings with parameters: {get_embeddings_params}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: texts=['{text[:50]}...'], task_type='RETRIEVAL_DOCUMENT', metadata={request_metadata}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: embedding_model_name={embedding_model_name}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Task Type]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
-                            
                             embedding = embedding_model.get_embeddings([text], task_type="RETRIEVAL_DOCUMENT", metadata=request_metadata)
                         else:
-                            # Log detailed parameters before get_embeddings call
-                            get_embeddings_params = {
-                                "texts": [text],
-                                "metadata": request_metadata
-                            }
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: Calling get_embeddings with parameters: {get_embeddings_params}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: texts=['{text[:50]}...'], metadata={request_metadata}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: embedding_model_name={embedding_model_name}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [With Metadata]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
-                            
                             embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
                     except TypeError:
-                        # Fallback if task_type or metadata is not supported
                         try:
-                            # Log detailed parameters before get_embeddings call
-                            get_embeddings_params = {
-                                "texts": [text],
-                                "metadata": request_metadata
-                            }
-                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: Calling get_embeddings with parameters: {get_embeddings_params}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: texts=['{text[:50]}...'], metadata={request_metadata}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: embedding_model_name={embedding_model_name}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Fallback With Metadata]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
-                            
                             embedding = embedding_model.get_embeddings([text], metadata=request_metadata)
                         except TypeError:
-                            # Final fallback without metadata if not supported
-                            # Log detailed parameters before get_embeddings call
-                            get_embeddings_params = {
-                                "texts": [text]
-                            }
-                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: Calling get_embeddings with parameters: {get_embeddings_params}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: texts=['{text[:50]}...'], no_metadata=True")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: embedding_model_name={embedding_model_name}")
-                            logger.info(f"GET_EMBEDDINGS_CALL [Final Fallback]: text_length={len(text)}, batch_size={batch_size}, batch_index={i//batch_size}")
-                            
                             embedding = embedding_model.get_embeddings([text])
-                    
-                    # Extract the vector values
                     if hasattr(embedding[0], 'values'):
                         batch_embeddings.append(embedding[0].values)
                     else:
-                        # Fallback for different API versions
                         batch_embeddings.append(embedding[0])
-                
                 embeddings_list.extend(batch_embeddings)
-            
-            logger.info(f"Generated {len(embeddings_list)} embeddings using Vertex AI model: {embedding_model_name}")
             return embeddings_list
-            
-        except ImportError:
-            # Enhanced exception logging with traceback and input parameters
-            logger.error(f"Vertex AI language models not available at line {traceback.extract_tb(sys.exc_info()[2])[-1].lineno}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
-            logger.error(f"Text samples: {[text[:100] + '...' if len(text) > 100 else text for text in texts[:2]]}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise Exception("Vertex AI embedding generation failed: Missing dependencies")
         except Exception as e:
-            # Enhanced exception logging with traceback and input parameters
-            logger.error(f"Vertex AI embeddings error at line {traceback.extract_tb(e.__traceback__)[-1].lineno}: {str(e)}")
-            logger.error(f"Input parameters - texts: {len(texts)}, metadata: {metadata}")
-            logger.error(f"Text samples: {[text[:100] + '...' if len(text) > 100 else text for text in texts[:2]]}")
-            logger.error(f"Embedding model: {getattr(settings, 'embeddings_model', 'text-embedding-005')}")
+            import traceback
+            logger.error(f"Vertex AI (REST) embeddings error: {str(e)}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise Exception(f"Vertex AI embedding generation failed: {str(e)}")
+            raise
+
+    async def _generate_embeddings_async_impl(self, texts: List[str], metadata: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+        """Async implementation for gRPC transport."""
+        # (Move the current async body here)
+        try:
+            logger.info(f"Vertex AI (gRPC) generate_embeddings called with: texts={len(texts)}, metadata={metadata}")
+            from vertexai.language_models import TextEmbeddingModel
+            request_metadata = {}
+            if metadata:
+                combined_metadata = {**settings.parsed_llm_metadata, **metadata}
+                request_metadata.update(combined_metadata)
+            elif settings.parsed_llm_metadata:
+                request_metadata.update(settings.parsed_llm_metadata)
+            embedding_model_name = getattr(settings, 'embeddings_model', 'text-embedding-005')
+            embedding_model = TextEmbeddingModel.from_pretrained(embedding_model_name)
+            embeddings_list = []
+            batch_size = 5
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_embeddings = []
+                for text in batch_texts:
+                    try:
+                        if embedding_model_name in ['text-embedding-004', 'text-embedding-005', 'gemini-embedding-001']:
+                            embedding = await embedding_model.get_embeddings_async([text], task_type="RETRIEVAL_DOCUMENT", metadata=request_metadata)
+                        else:
+                            embedding = await embedding_model.get_embeddings_async([text], metadata=request_metadata)
+                    except TypeError:
+                        try:
+                            embedding = await embedding_model.get_embeddings_async([text], metadata=request_metadata)
+                        except TypeError:
+                            embedding = await embedding_model.get_embeddings_async([text])
+                    if hasattr(embedding[0], 'values'):
+                        batch_embeddings.append(embedding[0].values)
+                    else:
+                        batch_embeddings.append(embedding[0])
+                embeddings_list.extend(batch_embeddings)
+            return embeddings_list
+        except Exception as e:
+            import traceback
+            logger.error(f"Vertex AI (gRPC) embeddings error: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            raise
     
     def get_provider_info(self) -> Dict[str, str]:
         """Get information about the current provider."""
