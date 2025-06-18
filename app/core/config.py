@@ -52,6 +52,29 @@ class Settings(BaseSettings):
     db_user: str = Field(default="", env="DB_USER")
     db_password: str = Field(default="", env="DB_PASSWORD")
     
+    # Read-Only Metrics Database Configuration
+    metrics_db_type: str = Field(default="sqlite", env="METRICS_DB_TYPE")  # sqlite, mongodb, postgresql
+    metrics_db_path: str = Field(default="./metrics.db", env="METRICS_DB_PATH")  # For SQLite
+    
+    # MongoDB settings (read-only)
+    metrics_mongodb_uri: str = Field(default="", env="METRICS_MONGODB_URI")  # For MongoDB
+    metrics_mongodb_database: str = Field(default="metrics_db", env="METRICS_MONGODB_DATABASE")
+    metrics_mongodb_collection: str = Field(default="metrics", env="METRICS_MONGODB_COLLECTION")
+    
+    # PostgreSQL settings (read-only)
+    metrics_pg_host: str = Field(default="localhost", env="METRICS_PG_HOST")
+    metrics_pg_port: int = Field(default=5432, env="METRICS_PG_PORT")
+    metrics_pg_database: str = Field(default="metrics", env="METRICS_PG_DATABASE")
+    metrics_pg_username: str = Field(default="postgres", env="METRICS_PG_USERNAME")
+    metrics_pg_password: str = Field(default="", env="METRICS_PG_PASSWORD")
+    
+    # Query optimization settings
+    metrics_query_timeout: int = Field(default=30, env="METRICS_QUERY_TIMEOUT")
+    metrics_connection_pool_size: int = Field(default=20, env="METRICS_CONNECTION_POOL_SIZE")
+    metrics_enable_query_cache: bool = Field(default=True, env="METRICS_ENABLE_QUERY_CACHE")
+    metrics_default_limit: int = Field(default=1000, env="METRICS_DEFAULT_LIMIT")
+    metrics_max_limit: int = Field(default=10000, env="METRICS_MAX_LIMIT")
+    
     # Vector Database Configuration
     faiss_index_path: str = Field(default="./data/faiss_index", env="FAISS_INDEX_PATH")
     embeddings_model: str = Field(default="text-embedding-005", env="EMBEDDINGS_MODEL")

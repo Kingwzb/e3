@@ -11,6 +11,7 @@ from app.api.chat import router as chat_router
 from app.api.llm import router as llm_router
 from app.utils.logging import logger
 from app.tools.vector_store import initialize_sample_documents
+from app.tools.metrics_db_tools import initialize_metrics_database, close_metrics_database
 
 
 @asynccontextmanager
@@ -28,6 +29,10 @@ async def lifespan(app: FastAPI):
         initialize_sample_documents()
         logger.info("Vector store initialized")
         
+        # Initialize metrics database abstraction layer
+        await initialize_metrics_database()
+        logger.info("Metrics database abstraction layer initialized")
+        
         logger.info("Application startup completed successfully")
         
     except Exception as e:
@@ -38,6 +43,10 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down AI Chat Agent application...")
+    
+    # Close metrics database
+    await close_metrics_database()
+    logger.info("Metrics database closed")
 
 
 # Create FastAPI app
