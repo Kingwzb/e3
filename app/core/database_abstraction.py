@@ -250,8 +250,14 @@ class MetricsDatabase:
             from app.core.adapters.sqlite_adapter import SQLiteMetricsAdapter
             self.adapter = SQLiteMetricsAdapter(self.config)
         elif self.config.database_type == DatabaseType.MONGODB:
-            from app.core.adapters.mongodb_adapter import MongoDBMetricsAdapter
-            self.adapter = MongoDBMetricsAdapter(self.config)
+            # Check if this is for ee-productivities database
+            database_name = self.config.connection_params.get("database_name", "")
+            if database_name == "ee-productivities":
+                from app.core.adapters.mongodb_ee_productivities_adapter import MongoDBEEProductivitiesAdapter
+                self.adapter = MongoDBEEProductivitiesAdapter(self.config)
+            else:
+                from app.core.adapters.mongodb_adapter import MongoDBMetricsAdapter
+                self.adapter = MongoDBMetricsAdapter(self.config)
         elif self.config.database_type == DatabaseType.POSTGRESQL:
             # PostgreSQL adapter not yet implemented for write operations
             raise ValueError("PostgreSQL adapter for write operations not yet implemented")
@@ -355,8 +361,14 @@ class MetricsQueryDatabase:
             from app.core.adapters.sqlite_query_adapter import SQLiteQueryAdapter
             self.adapter = SQLiteQueryAdapter(self.config)
         elif self.config.database_type == DatabaseType.MONGODB:
-            from app.core.adapters.mongodb_query_adapter import MongoDBQueryAdapter
-            self.adapter = MongoDBQueryAdapter(self.config)
+            # Check if this is for ee-productivities database
+            database_name = self.config.connection_params.get("database_name", "")
+            if database_name == "ee-productivities":
+                from app.core.adapters.mongodb_ee_productivities_query_adapter import MongoDBEEProductivitiesQueryAdapter
+                self.adapter = MongoDBEEProductivitiesQueryAdapter(self.config)
+            else:
+                from app.core.adapters.mongodb_query_adapter import MongoDBQueryAdapter
+                self.adapter = MongoDBQueryAdapter(self.config)
         elif self.config.database_type == DatabaseType.POSTGRESQL:
             from app.core.adapters.postgresql_query_adapter import PostgreSQLQueryAdapter
             self.adapter = PostgreSQLQueryAdapter(self.config)
@@ -460,6 +472,24 @@ def get_mongodb_config(
     )
 
 
+def get_mongodb_ee_productivities_config(
+    connection_string: str,
+    database_name: str = "ee-productivities",
+    collection_name: str = "application_snapshot"
+) -> DatabaseConfig:
+    """Get MongoDB configuration for ee-productivities database with read-write access."""
+    return DatabaseConfig(
+        database_type=DatabaseType.MONGODB,
+        connection_params={
+            "connection_string": connection_string,
+            "database_name": database_name,
+            "collection_name": collection_name
+        },
+        read_only=False,
+        connection_pool_size=30
+    )
+
+
 def get_postgresql_config(
     host: str,
     port: int,
@@ -500,6 +530,24 @@ def get_mongodb_query_config(
     collection_name: str = "metrics"
 ) -> DatabaseConfig:
     """Get MongoDB configuration for production querying."""
+    return DatabaseConfig(
+        database_type=DatabaseType.MONGODB,
+        connection_params={
+            "connection_string": connection_string,
+            "database_name": database_name,
+            "collection_name": collection_name
+        },
+        read_only=True,
+        connection_pool_size=50  # Higher for read-heavy workloads
+    )
+
+
+def get_mongodb_ee_productivities_query_config(
+    connection_string: str,
+    database_name: str = "ee-productivities",
+    collection_name: str = "application_snapshot"
+) -> DatabaseConfig:
+    """Get MongoDB configuration for ee-productivities database querying."""
     return DatabaseConfig(
         database_type=DatabaseType.MONGODB,
         connection_params={
