@@ -96,6 +96,14 @@ def _select_most_appropriate_tool(message: str, tools: List[Dict[str, Any]]) -> 
         "get_database_schema": [
             "schema", "database", "collection", "collections", "structure",
             "table", "tables", "field", "fields"
+        ],
+        "get_field_paths": [
+            "field", "fields", "path", "paths", "structure", "schema", "available",
+            "what", "which", "show", "list", "explore", "discover"
+        ],
+        "get_field_values": [
+            "value", "values", "unique", "distinct", "possible", "available",
+            "what", "which", "show", "list", "options", "choices"
         ]
     }
     
@@ -154,6 +162,8 @@ IMPORTANT: You MUST use the available tools to extract data when the user asks a
 - Management segments, organizational structures
 - Statistics, performance metrics, data
 - Database schema, collections, structure
+- Field paths and available fields in collections
+- Unique values for specific fields
 
 Available tools and their capabilities:
 - query_application_snapshots: Query application snapshots (status, criticality, sector, development model, etc.)
@@ -163,6 +173,8 @@ Available tools and their capabilities:
 - query_management_segments: Query management segment trees
 - query_statistics: Query performance metrics and statistics
 - get_database_schema: Get database schema information
+- get_field_paths: Get available field paths in a collection (use when user asks about fields, structure, or what data is available)
+- get_field_values: Get unique values for a specific field path (use when user asks about possible values, options, or distinct values)
 
 DO NOT respond with generic messages. If the user asks about any of the above topics, you MUST call the appropriate tool to get the data. Only respond with "No data required" if the query is completely unrelated to the database."""
 
@@ -207,11 +219,39 @@ DO NOT respond with generic messages. If the user asks about any of the above to
         
         # Select the most appropriate tool based on the query content
         selected_tool = _select_most_appropriate_tool(current_message, tools_for_llm)
-        if selected_tool:
+        
+        # For field-related queries, include both field tools and relevant data tools
+        message_lower = current_message.lower()
+        field_keywords = ["field", "fields", "path", "paths", "structure", "schema", "available", "what", "which", "show", "list", "explore", "discover", "value", "values", "unique", "distinct", "possible", "options", "choices"]
+        
+        is_field_query = any(keyword in message_lower for keyword in field_keywords)
+        
+        if is_field_query:
+            # For field queries, provide both field tools to let LLM choose
+            field_tools = [tool for tool in tools_for_llm if tool["function"]["name"] in ["get_field_paths", "get_field_values"]]
+            if field_tools:
+                # Due to Vertex AI limitation, we need to choose one tool
+                # Prioritize get_field_paths for structure queries, get_field_values for value queries
+                if any(word in message_lower for word in ["value", "values", "unique", "distinct", "possible", "options", "choices"]):
+                    # User is asking for specific values
+                    value_tool = [tool for tool in field_tools if tool["function"]["name"] == "get_field_values"]
+                    tools_for_llm = value_tool if value_tool else field_tools[:1]
+                else:
+                    # User is asking for field structure/available fields
+                    path_tool = [tool for tool in field_tools if tool["function"]["name"] == "get_field_paths"]
+                    tools_for_llm = path_tool if path_tool else field_tools[:1]
+                logger.info(f"Field query detected. Using field tool: {[tool['function']['name'] for tool in tools_for_llm]}")
+            else:
+                # Fallback to selected tool if no field tools available
+                tools_for_llm = [selected_tool] if selected_tool else tools_for_llm[:1]
+                logger.info(f"Field query detected but no field tools available. Using: {[tool['function']['name'] for tool in tools_for_llm]}")
+        elif selected_tool:
             tools_for_llm = [selected_tool]
             logger.info(f"Selected tool based on query: {selected_tool['function']['name']}")
         else:
-            logger.info("No specific tool selected, using all tools")
+            # Vertex AI limitation: use only one tool
+            tools_for_llm = tools_for_llm[:1]
+            logger.info(f"No specific tool selected, using first available tool: {[tool['function']['name'] for tool in tools_for_llm]}")
         
         logger.debug(f"Created {len(tools_for_llm)} ee-productivities tools for LLM")
         logger.info(f"Available tools for LLM: {[tool['function']['name'] for tool in tools_for_llm]}")
@@ -321,7 +361,9 @@ def create_metrics_node_tools() -> Dict[str, Any]:
             "query_enablers",
             "query_management_segments",
             "query_statistics",
-            "get_database_schema"
+            "get_database_schema",
+            "get_field_paths",
+            "get_field_values"
         ],
         "default_config": {
             "database": "ee-productivities",

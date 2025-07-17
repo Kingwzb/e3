@@ -29,10 +29,10 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
         # Available collections in ee-productivities database (for reference only)
         self.available_collections = [
             "application_snapshot",
-            "employeed_ratio", 
+            "employee_ratio", 
             "employee_tree_archived",
-            "enabler_csi_snapsots",
-            "mangement_segment_tree",
+            "enabler_csi_snapshots",
+            "management_segment_tree",
             "statistic"
         ]
     
@@ -176,7 +176,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
                     "developmentModel": doc.get("developmentModel"),
                     "hostingModel": doc.get("hostingModel")
                 }
-            elif self.collection_name == "employeed_ratio":
+            elif self.collection_name == "employee_ratio":
                 attributes = {
                     "soeId": doc.get("soeId")
                 }
@@ -196,14 +196,14 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
                     "engineerNum": doc.get("engineerNum", 0),
                     "totalNum": doc.get("totalNum", 0)
                 }
-            elif self.collection_name == "enabler_csi_snapsots":
+            elif self.collection_name == "enabler_csi_snapshots":
                 attributes = {
                     "csiId": doc.get("csiId")
                 }
                 values = {
                     "enablersAggregation": doc.get("enablersAggregation", [])
                 }
-            elif self.collection_name == "mangement_segment_tree":
+            elif self.collection_name == "management_segment_tree":
                 attributes = {
                     "name": doc.get("name"),
                     "year": doc.get("year"),

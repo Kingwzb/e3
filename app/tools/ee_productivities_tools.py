@@ -243,8 +243,8 @@ class QueryEmployeeRatiosTool(EEProductivitiesDatabaseTool):
         try:
             db = await self._get_database()
             
-            # Switch to employeed_ratio collection
-            await self._switch_collection("employeed_ratio")
+            # Switch to employee_ratio collection
+            await self._switch_collection("employee_ratio")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -255,7 +255,7 @@ class QueryEmployeeRatiosTool(EEProductivitiesDatabaseTool):
             
             native_query = DatabaseQuery(
                 operation="find",
-                collection_table="employeed_ratio",
+                collection_table="employee_ratio",
                 native_query={"filter": filter_dict, "limit": limit}
             )
             
@@ -375,8 +375,8 @@ class QueryEnablersTool(EEProductivitiesDatabaseTool):
         try:
             db = await self._get_database()
             
-            # Switch to enabler_csi_snapsots collection
-            await self._switch_collection("enabler_csi_snapsots")
+            # Switch to enabler_csi_snapshots collection
+            await self._switch_collection("enabler_csi_snapshots")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -387,7 +387,7 @@ class QueryEnablersTool(EEProductivitiesDatabaseTool):
             
             native_query = DatabaseQuery(
                 operation="find",
-                collection_table="enabler_csi_snapsots",
+                collection_table="enabler_csi_snapshots",
                 native_query={"filter": filter_dict, "limit": limit}
             )
             
@@ -441,8 +441,8 @@ class QueryManagementSegmentsTool(EEProductivitiesDatabaseTool):
         try:
             db = await self._get_database()
             
-            # Switch to mangement_segment_tree collection
-            await self._switch_collection("mangement_segment_tree")
+            # Switch to management_segment_tree collection
+            await self._switch_collection("management_segment_tree")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -453,7 +453,7 @@ class QueryManagementSegmentsTool(EEProductivitiesDatabaseTool):
             
             native_query = DatabaseQuery(
                 operation="find",
-                collection_table="mangement_segment_tree",
+                collection_table="management_segment_tree",
                 native_query={"filter": filter_dict, "limit": limit}
             )
             
@@ -612,6 +612,200 @@ class GetDatabaseSchemaTool(EEProductivitiesDatabaseTool):
         raise NotImplementedError("Synchronous run is not supported. Use async.")
 
 
+class GetFieldPathsInput(BaseModel):
+    """Input for getting field paths."""
+    collection_name: Optional[str] = Field(None, description="Specific collection name, or all if not specified")
+
+
+class GetFieldValuesInput(BaseModel):
+    """Input for getting field values."""
+    collection_name: str = Field(..., description="Collection name")
+    field_path: str = Field(..., description="Field path (e.g., 'application.criticality', 'status', 'year')")
+    limit: Optional[int] = Field(100, description="Maximum number of unique values to return")
+
+
+class GetFieldPathsTool(EEProductivitiesDatabaseTool):
+    """Tool for getting available field paths in collections."""
+    
+    name: str = "get_field_paths"
+    description: str = "Get all available field paths in the ee-productivities database collections. Use this to understand the data structure and available fields for querying."
+    args_schema: type = GetFieldPathsInput
+    
+    def _map_collection_name(self, collection_name: str) -> str:
+        """Map collection names to handle plural/singular variations."""
+        collection_mapping = {
+            "employee_ratios": "employee_ratio",
+            "application_snapshots": "application_snapshot",
+            "management_segments": "management_segment_tree",
+            "enabler_snapshots": "enabler_csi_snapshots",
+            "employee_trees": "employee_tree_archived"
+        }
+        return collection_mapping.get(collection_name, collection_name)
+    
+    async def _arun(self, **kwargs) -> str:
+        """Execute the tool."""
+        try:
+            db = await self._get_database()
+            
+            collection_name = kwargs.get("collection_name")
+            
+            if collection_name:
+                # Map collection name to handle plural/singular variations
+                mapped_collection_name = self._map_collection_name(collection_name)
+                logger.info(f"Mapping collection name from '{collection_name}' to '{mapped_collection_name}'")
+                
+                # Get field paths for specific collection
+                await self._switch_collection(mapped_collection_name)
+                field_paths = await self._get_collection_field_paths(mapped_collection_name)
+                result = {
+                    "collection": mapped_collection_name,
+                    "original_collection": collection_name,
+                    "field_paths": field_paths
+                }
+                return str(result)
+            else:
+                # Get field paths for all collections
+                collections = await db.adapter.list_collections()
+                all_field_paths = {}
+                
+                for collection in collections:
+                    try:
+                        await self._switch_collection(collection)
+                        field_paths = await self._get_collection_field_paths(collection)
+                        all_field_paths[collection] = field_paths
+                    except Exception as e:
+                        logger.warning(f"Failed to get field paths for collection {collection}: {e}")
+                        all_field_paths[collection] = {"error": str(e)}
+                
+                return str(all_field_paths)
+            
+        except Exception as e:
+            logger.error(f"Failed to get field paths: {e}")
+            return f"Error getting field paths: {str(e)}"
+    
+    async def _get_collection_field_paths(self, collection_name: str) -> List[str]:
+        """Get field paths for a specific collection."""
+        try:
+            db = await self._get_database()
+            # Get a sample document to analyze structure
+            sample_doc = await db.adapter.collection.find_one()
+            if not sample_doc:
+                return []
+            
+            field_paths = self._extract_field_paths(sample_doc)
+            return sorted(field_paths)
+            
+        except Exception as e:
+            logger.error(f"Failed to get field paths for {collection_name}: {e}")
+            return []
+    
+    def _extract_field_paths(self, obj: Any, prefix: str = "") -> List[str]:
+        """Recursively extract field paths from a document."""
+        field_paths = []
+        
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                current_path = f"{prefix}.{key}" if prefix else key
+                field_paths.append(current_path)
+                
+                # Recursively extract nested fields
+                if isinstance(value, (dict, list)):
+                    nested_paths = self._extract_field_paths(value, current_path)
+                    field_paths.extend(nested_paths)
+        
+        elif isinstance(obj, list) and obj:
+            # For arrays, get paths from the first element
+            if isinstance(obj[0], dict):
+                nested_paths = self._extract_field_paths(obj[0], prefix)
+                field_paths.extend(nested_paths)
+        
+        return field_paths
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Synchronous run is not supported. Use async.")
+
+
+class GetFieldValuesTool(EEProductivitiesDatabaseTool):
+    """Tool for getting unique values for a specific field path."""
+    
+    name: str = "get_field_values"
+    description: str = "Get all unique values for a specific field path in a collection. Use this to understand what values are available for filtering and querying."
+    args_schema: type = GetFieldValuesInput
+    
+    def _map_collection_name(self, collection_name: str) -> str:
+        """Map collection names to handle plural/singular variations."""
+        collection_mapping = {
+            "employee_ratios": "employee_ratio",
+            "application_snapshots": "application_snapshot",
+            "management_segments": "management_segment_tree",
+            "enabler_snapshots": "enabler_csi_snapshots",
+            "employee_trees": "employee_tree_archived"
+        }
+        return collection_mapping.get(collection_name, collection_name)
+    
+    async def _arun(self, **kwargs) -> str:
+        """Execute the tool."""
+        try:
+            db = await self._get_database()
+            
+            collection_name = kwargs["collection_name"]
+            field_path = kwargs["field_path"]
+            limit = kwargs.get("limit", 100)
+            
+            # Map collection name to handle plural/singular variations
+            mapped_collection_name = self._map_collection_name(collection_name)
+            logger.info(f"Mapping collection name from '{collection_name}' to '{mapped_collection_name}'")
+            
+            # Switch to the specified collection
+            await self._switch_collection(mapped_collection_name)
+            
+            # Get unique values for the field path
+            values = await self._get_field_values(mapped_collection_name, field_path, limit)
+            
+            result = {
+                "collection": mapped_collection_name,
+                "original_collection": collection_name,
+                "field_path": field_path,
+                "unique_values": values,
+                "total_count": len(values)
+            }
+            return str(result)
+            
+        except Exception as e:
+            logger.error(f"Failed to get field values: {e}")
+            return f"Error getting field values: {str(e)}"
+    
+    async def _get_field_values(self, collection_name: str, field_path: str, limit: int) -> List[Any]:
+        """Get unique values for a field path."""
+        try:
+            db = await self._get_database()
+            # Use MongoDB's distinct operation to get unique values
+            distinct_values = await db.adapter.collection.distinct(field_path)
+            
+            # Sort and limit the results
+            sorted_values = sorted(distinct_values)
+            limited_values = sorted_values[:limit]
+            
+            # Convert values to strings for consistent output
+            string_values = []
+            for value in limited_values:
+                if value is None:
+                    string_values.append("null")
+                elif isinstance(value, (dict, list)):
+                    string_values.append(str(value))
+                else:
+                    string_values.append(str(value))
+            
+            return string_values
+            
+        except Exception as e:
+            logger.error(f"Failed to get values for field {field_path}: {e}")
+            return []
+
+    def _run(self, *args, **kwargs):
+        raise NotImplementedError("Synchronous run is not supported. Use async.")
+
+
 def create_ee_productivities_tools() -> List[BaseTool]:
     """Create all ee-productivities database tools."""
     return [
@@ -621,5 +815,7 @@ def create_ee_productivities_tools() -> List[BaseTool]:
         QueryEnablersTool(),
         QueryManagementSegmentsTool(),
         QueryStatisticsTool(),
-        GetDatabaseSchemaTool()
+        GetDatabaseSchemaTool(),
+        GetFieldPathsTool(),
+        GetFieldValuesTool()
     ] 

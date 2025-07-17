@@ -123,7 +123,7 @@ async def test_ee_productivities_adapters():
         await query_db.initialize()
         
         # Switch to different collections
-        collections_to_test = ["employeed_ratio", "employee_tree_archived", "statistic"]
+        collections_to_test = ["employee_ratio", "employee_tree_archived", "statistic"]
         
         for collection_name in collections_to_test:
             try:
@@ -185,11 +185,11 @@ async def test_collection_specific_queries():
         
         await db.close()
         
-        # Test employeed_ratio collection
-        print("\n👥 Testing employeed_ratio collection...")
+        # Test employee_ratio collection
+        print("\n👥 Testing employee_ratio collection...")
         config = get_mongodb_ee_productivities_query_config(
             connection_string=connection_string,
-            collection_name="employeed_ratio"
+            collection_name="employee_ratio"
         )
         
         db = MetricsQueryDatabase(config)

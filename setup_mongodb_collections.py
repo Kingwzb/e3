@@ -97,7 +97,7 @@ class MongoDBSetup:
         return applications
     
     def generate_employee_ratio_data(self, count: int = 30) -> List[Dict[str, Any]]:
-        """Generate mock data for employeed_ratio collection."""
+        """Generate mock data for employee_ratio collection."""
         employee_ratios = []
         
         for i in range(count):
@@ -179,7 +179,7 @@ class MongoDBSetup:
         return employee_trees
     
     def generate_enabler_csi_snapshots_data(self, count: int = 40) -> List[Dict[str, Any]]:
-        """Generate mock data for enabler_csi_snapsots collection."""
+        """Generate mock data for enabler_csi_snapshots collection."""
         enabler_snapshots = []
         
         for i in range(count):
@@ -218,7 +218,7 @@ class MongoDBSetup:
         return enabler_snapshots
     
     def generate_management_segment_tree_data(self, count: int = 80) -> List[Dict[str, Any]]:
-        """Generate mock data for mangement_segment_tree collection."""
+        """Generate mock data for management_segment_tree collection."""
         management_trees = []
         
         for i in range(count):
@@ -302,13 +302,16 @@ class MongoDBSetup:
         try:
             print("🔄 Setting up MongoDB collections...")
             
+            # First, clean up any old collections with incorrect names
+            await self.cleanup_old_collections()
+            
             # Create collections and insert mock data
             collections_data = {
                 "application_snapshot": self.generate_application_snapshot_data(50),
-                "employeed_ratio": self.generate_employee_ratio_data(30),
+                "employee_ratio": self.generate_employee_ratio_data(30),
                 "employee_tree_archived": self.generate_employee_tree_archived_data(100),
-                "enabler_csi_snapsots": self.generate_enabler_csi_snapshots_data(40),
-                "mangement_segment_tree": self.generate_management_segment_tree_data(80),
+                "enabler_csi_snapshots": self.generate_enabler_csi_snapshots_data(40),
+                "management_segment_tree": self.generate_management_segment_tree_data(80),
                 "statistic": self.generate_statistic_data(25)
             }
             
@@ -345,7 +348,7 @@ class MongoDBSetup:
                     [("status", 1)],
                     [("sector", 1)]
                 ]
-            elif collection_name == "employeed_ratio":
+            elif collection_name == "employee_ratio":
                 indexes = [
                     [("soeId", 1)],
                     [("employeeRatioSnapshot.year", 1), ("employeeRatioSnapshot.month", 1)]
@@ -357,12 +360,12 @@ class MongoDBSetup:
                     [("hierarchy", 1)],
                     [("archivedKey", 1)]
                 ]
-            elif collection_name == "enabler_csi_snapsots":
+            elif collection_name == "enabler_csi_snapshots":
                 indexes = [
                     [("csiId", 1)],
                     [("enablersAggregation.year", 1), ("enablersAggregation.month", 1)]
                 ]
-            elif collection_name == "mangement_segment_tree":
+            elif collection_name == "management_segment_tree":
                 indexes = [
                     [("name", 1)],
                     [("year", 1), ("month", 1)],
@@ -389,6 +392,31 @@ class MongoDBSetup:
         except Exception as e:
             print(f"❌ Failed to create indexes for {collection_name}: {e}")
     
+    async def cleanup_old_collections(self):
+        """Clean up old collections with incorrect names."""
+        try:
+            print("🧹 Cleaning up old collections with incorrect names...")
+            
+            # List of old collection names that should be dropped
+            old_collection_names = [
+                "employeed_ratio",  # Old typo
+                "enabler_csi_snapsots",  # Old typo
+                "mangement_segment_tree"  # Old typo
+            ]
+            
+            existing_collections = await self.database.list_collection_names()
+            
+            for old_name in old_collection_names:
+                if old_name in existing_collections:
+                    print(f"🗑️  Dropping old collection: {old_name}")
+                    await self.database[old_name].drop()
+                    print(f"✅ Dropped {old_name}")
+            
+            print("✅ Cleanup completed!")
+            
+        except Exception as e:
+            print(f"⚠️  Cleanup warning (non-critical): {e}")
+    
     async def verify_setup(self):
         """Verify that all collections were created with data."""
         try:
@@ -409,12 +437,23 @@ class MongoDBSetup:
 
 async def main():
     """Main function to set up MongoDB collections."""
+    print("🚀 MongoDB Collection Setup Script")
+    print("=" * 50)
+    print("This script will:")
+    print("1. Clean up old collections with incorrect names")
+    print("2. Create new collections with correct names")
+    print("3. Generate mock data for each collection")
+    print("4. Create indexes for optimal performance")
+    print("=" * 50)
+    
     setup = MongoDBSetup()
     
     try:
         await setup.connect()
         await setup.setup_collections()
         await setup.verify_setup()
+        print("\n🎉 Database setup completed successfully!")
+        print("✅ All collections created with correct names and mock data")
     finally:
         await setup.disconnect()
 

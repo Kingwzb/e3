@@ -27,10 +27,10 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
         # Available collections in ee-productivities database (for reference only)
         self.available_collections = [
             "application_snapshot",
-            "employeed_ratio", 
+            "employee_ratio", 
             "employee_tree_archived",
-            "enabler_csi_snapsots",
-            "mangement_segment_tree",
+            "enabler_csi_snapshots",
+            "management_segment_tree",
             "statistic"
         ]
     
@@ -117,7 +117,7 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
                 [("name", 1)],
                 [("organization", 1)]
             ]
-        elif collection_name == "employeed_ratio":
+        elif collection_name == "employee_ratio":
             return [
                 [("soeId", 1)],
                 [("employeeRatioSnapshot.year", 1), ("employeeRatioSnapshot.month", 1)],
@@ -131,12 +131,12 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
                 [("archivedKey", 1)],
                 [("parentSoeId", 1)]
             ]
-        elif collection_name == "enabler_csi_snapsots":
+        elif collection_name == "enabler_csi_snapshots":
             return [
                 [("csiId", 1)],
                 [("enablersAggregation.year", 1), ("enablersAggregation.month", 1)]
             ]
-        elif collection_name == "mangement_segment_tree":
+        elif collection_name == "management_segment_tree":
             return [
                 [("name", 1)],
                 [("year", 1), ("month", 1)],
@@ -198,7 +198,7 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
                 "developmentModel": metric.attributes.get("developmentModel", "Agile"),
                 "hostingModel": metric.attributes.get("hostingModel", "Cloud")
             }
-        elif self.collection_name == "employeed_ratio":
+        elif self.collection_name == "employee_ratio":
             return {
                 **base_document,
                 "soeId": metric.attributes.get("soeId", f"SOE{metric_id[:8]}"),
@@ -216,7 +216,7 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
                 "engineerNum": metric.values.get("engineerNum", 0),
                 "totalNum": metric.values.get("totalNum", 0)
             }
-        elif self.collection_name == "enabler_csi_snapsots":
+        elif self.collection_name == "enabler_csi_snapshots":
             return {
                 **base_document,
                 "csiId": metric.attributes.get("csiId", f"CSI{metric_id[:8]}"),
@@ -378,14 +378,14 @@ class MongoDBEEProductivitiesAdapter(MetricsAdapter):
                     "engineerNum": doc.get("engineerNum", 0),
                     "totalNum": doc.get("totalNum", 0)
                 }
-            elif self.collection_name == "enabler_csi_snapsots":
+            elif self.collection_name == "enabler_csi_snapshots":
                 attributes = {
                     "csiId": doc.get("csiId")
                 }
                 values = {
                     "enablersAggregation": doc.get("enablersAggregation", [])
                 }
-            elif self.collection_name == "mangement_segment_tree":
+            elif self.collection_name == "management_segment_tree":
                 attributes = {
                     "name": doc.get("name"),
                     "year": doc.get("year"),
