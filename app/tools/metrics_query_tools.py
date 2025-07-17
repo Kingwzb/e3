@@ -8,7 +8,7 @@ from langchain.tools import BaseTool
 from app.core.database_abstraction import (
     MetricsQueryDatabase, DatabaseConfig, QueryFilter, ComplexQuery, 
     JoinConfig, get_sqlite_query_config, get_mongodb_query_config, 
-    get_postgresql_query_config
+    get_postgresql_query_config, get_mongodb_ee_productivities_query_config
 )
 from app.core.config import settings
 
@@ -31,10 +31,10 @@ async def get_metrics_database() -> MetricsQueryDatabase:
                     db_path=getattr(settings, 'metrics_db_path', './metrics.db')
                 )
             elif db_type == "mongodb":
-                config = get_mongodb_query_config(
+                config = get_mongodb_ee_productivities_query_config(
                     connection_string=getattr(settings, 'metrics_mongodb_uri', 'mongodb://localhost:27017'),
-                    database_name=getattr(settings, 'metrics_mongodb_db', 'metrics_db'),
-                    collection_name=getattr(settings, 'metrics_mongodb_collection', 'metrics')
+                    database_name=getattr(settings, 'metrics_mongodb_database', 'ee-productivities'),
+                    collection_name=None  # No default collection - tools will switch dynamically
                 )
             elif db_type == "postgresql":
                 config = get_postgresql_query_config(
@@ -69,8 +69,8 @@ async def close_metrics_database() -> None:
 class QueryMetricsInput(BaseModel):
     """Input for querying metrics with filters."""
     attributes: Optional[Dict[str, Any]] = Field(None, description="Attribute filters (key-value pairs)")
-    value_filters: Optional[Dict[str, Dict[str, Union[float, int]]]] = Field(
-        None, description="Value filters with operators like {'metric_name': {'$gte': 100}}"
+    value_filters: Optional[Dict[str, Dict[str, Union[float, int, str, bool]]]] = Field(
+        None, description="Value filters with operators like {'metric_name': {'$gte': 100}} or {'status': {'$eq': 'active'}}"
     )
     start_time: Optional[str] = Field(None, description="Start time (ISO format)")
     end_time: Optional[str] = Field(None, description="End time (ISO format)")

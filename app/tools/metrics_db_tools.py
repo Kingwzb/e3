@@ -12,7 +12,7 @@ from langchain.tools import BaseTool
 
 from app.core.database_abstraction import (
     MetricsDatabase, MetricTuple, QueryFilter, DatabaseConfig, AggregationQuery,
-    get_sqlite_config, get_mongodb_config
+    get_sqlite_config, get_mongodb_config, get_mongodb_ee_productivities_config
 )
 from app.core.config import settings
 from app.utils.logging import logger
@@ -41,10 +41,10 @@ async def initialize_metrics_database() -> None:
     elif db_type == "mongodb":
         if not settings.metrics_mongodb_uri:
             raise ValueError("MongoDB URI not configured. Set METRICS_MONGODB_URI environment variable.")
-        config = get_mongodb_config(
+        config = get_mongodb_ee_productivities_config(
             settings.metrics_mongodb_uri,
             settings.metrics_mongodb_database,
-            settings.metrics_mongodb_collection
+            collection_name=None  # No default collection - tools will switch dynamically
         )
     else:
         raise ValueError(f"Unsupported metrics database type: {db_type}")
@@ -66,7 +66,7 @@ async def close_metrics_database() -> None:
 class InsertMetricInput(BaseModel):
     """Input for inserting a single metric."""
     attributes: Dict[str, Any] = Field(..., description="Key-value attributes for the metric (e.g., category, metric_name, region)")
-    values: Dict[str, Union[float, int]] = Field(..., description="One or more metric values (e.g., {'value': 100, 'count': 5})")
+    values: Dict[str, Union[float, int, str, bool]] = Field(..., description="One or more metric values (e.g., {'value': 100, 'count': 5, 'status': 'active'})")
     timestamp: Optional[datetime] = Field(None, description="Optional timestamp (defaults to current time)")
 
 
@@ -109,7 +109,7 @@ class InsertMetricTool(BaseTool):
     async def _arun(
         self, 
         attributes: Dict[str, Any], 
-        values: Dict[str, Union[float, int]], 
+        values: Dict[str, Union[float, int, str, bool]], 
         timestamp: Optional[datetime] = None
     ) -> str:
         """Insert a metric asynchronously."""
@@ -304,7 +304,7 @@ def create_metrics_db_tools() -> List[BaseTool]:
 # Direct functions for programmatic use
 async def insert_metric_direct(
     attributes: Dict[str, Any],
-    values: Dict[str, Union[float, int]],
+    values: Dict[str, Union[float, int, str, bool]],
     timestamp: Optional[datetime] = None
 ) -> str:
     """Insert a metric directly (for programmatic use)."""

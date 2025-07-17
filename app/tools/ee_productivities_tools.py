@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
+import os
 
 from app.core.database_abstraction import (
     get_mongodb_ee_productivities_query_config,
@@ -96,14 +97,49 @@ class EEProductivitiesDatabaseTool(BaseTool):
     async def _get_database(self) -> MetricsQueryDatabase:
         """Get or initialize the database connection."""
         if self._db is None:
-            config = get_mongodb_ee_productivities_query_config(
-                connection_string="mongodb://localhost:27017",
-                database_name="ee-productivities",
-                collection_name="application_snapshot"
-            )
-            self._db = MetricsQueryDatabase(config)
-            await self._db.initialize()
+            try:
+                logger.info("Initializing ee-productivities database connection...")
+                
+                # Get connection string from environment or use default
+                connection_string = os.getenv("METRICS_MONGODB_URI", "mongodb://localhost:27017")
+                database_name = os.getenv("METRICS_MONGODB_DATABASE", "ee-productivities")
+                
+                logger.info(f"Using connection string: {connection_string}")
+                logger.info(f"Using database: {database_name}")
+                logger.info("Collections will be selected dynamically by each tool")
+                
+                config = get_mongodb_ee_productivities_query_config(
+                    connection_string=connection_string,
+                    database_name=database_name,
+                    collection_name=None  # No default collection - tools will switch dynamically
+                )
+                self._db = MetricsQueryDatabase(config)
+                await self._db.initialize()
+                logger.info(f"Database initialized. Adapter type: {type(self._db.adapter)}")
+            except Exception as e:
+                logger.error(f"Failed to initialize database: {e}")
+                raise
         return self._db
+    
+    async def _switch_collection(self, collection_name: str) -> None:
+        """Switch to a different collection within the same database."""
+        try:
+            db = await self._get_database()
+            logger.info(f"Switching to collection: {collection_name}")
+            logger.info(f"Database adapter: {db.adapter}")
+            
+            if db.adapter is None:
+                raise RuntimeError("Database adapter is None. Database may not be properly initialized.")
+            
+            if hasattr(db.adapter, 'switch_collection'):
+                await db.adapter.switch_collection(collection_name)
+                logger.info(f"Successfully switched to collection: {collection_name}")
+            else:
+                logger.warning(f"Adapter does not support collection switching: {type(db.adapter)}")
+                logger.warning(f"Available methods: {dir(db.adapter)}")
+        except Exception as e:
+            logger.error(f"Failed to switch collection to {collection_name}: {e}")
+            raise
     
     async def _close_database(self):
         """Close the database connection."""
@@ -125,7 +161,7 @@ class QueryApplicationSnapshotsTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to application_snapshot collection
-            await db.adapter.switch_collection("application_snapshot")
+            await self._switch_collection("application_snapshot")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -208,7 +244,7 @@ class QueryEmployeeRatiosTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to employeed_ratio collection
-            await db.adapter.switch_collection("employeed_ratio")
+            await self._switch_collection("employeed_ratio")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -266,7 +302,7 @@ class QueryEmployeeTreesTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to employee_tree_archived collection
-            await db.adapter.switch_collection("employee_tree_archived")
+            await self._switch_collection("employee_tree_archived")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -296,9 +332,8 @@ class QueryEmployeeTreesTool(EEProductivitiesDatabaseTool):
                 total_count=len(employee_trees),
                 employee_trees=employee_trees,
                 summary={
-                    "total_employees": sum(tree.totalNum for tree in employee_trees),
-                    "total_engineers": sum(tree.engineerNum for tree in employee_trees),
-                    "hierarchy_distribution": self._get_hierarchy_distribution(employee_trees)
+                    "hierarchy_distribution": self._get_hierarchy_distribution(employee_trees),
+                    "year_distribution": self._get_year_distribution(employee_trees)
                 }
             )
             
@@ -318,6 +353,14 @@ class QueryEmployeeTreesTool(EEProductivitiesDatabaseTool):
             hierarchy = tree.hierarchy
             distribution[hierarchy] = distribution.get(hierarchy, 0) + 1
         return distribution
+    
+    def _get_year_distribution(self, employee_trees: List[EmployeeTreeArchived]) -> Dict[int, int]:
+        """Get year distribution."""
+        distribution = {}
+        for tree in employee_trees:
+            year = tree.year
+            distribution[year] = distribution.get(year, 0) + 1
+        return distribution
 
 
 class QueryEnablersTool(EEProductivitiesDatabaseTool):
@@ -333,7 +376,7 @@ class QueryEnablersTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to enabler_csi_snapsots collection
-            await db.adapter.switch_collection("enabler_csi_snapsots")
+            await self._switch_collection("enabler_csi_snapsots")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -363,12 +406,8 @@ class QueryEnablersTool(EEProductivitiesDatabaseTool):
                 total_count=len(enablers),
                 enablers=enablers,
                 summary={
-                    "total_aggregations": sum(len(enabler.enablersAggregation) for enabler in enablers),
-                    "total_enablers": sum(
-                        len(agg.enablersSummary) 
-                        for enabler in enablers 
-                        for agg in enabler.enablersAggregation
-                    )
+                    "total_snapshots": sum(len(enabler.enablersAggregation) for enabler in enablers),
+                    "csi_distribution": self._get_csi_distribution(enablers)
                 }
             )
             
@@ -380,6 +419,14 @@ class QueryEnablersTool(EEProductivitiesDatabaseTool):
 
     def _run(self, *args, **kwargs):
         raise NotImplementedError("Synchronous run is not supported. Use async.")
+    
+    def _get_csi_distribution(self, enablers: List[EnablerCSISnapshots]) -> Dict[str, int]:
+        """Get CSI distribution."""
+        distribution = {}
+        for enabler in enablers:
+            csi_id = enabler.csiId
+            distribution[csi_id] = distribution.get(csi_id, 0) + 1
+        return distribution
 
 
 class QueryManagementSegmentsTool(EEProductivitiesDatabaseTool):
@@ -395,7 +442,7 @@ class QueryManagementSegmentsTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to mangement_segment_tree collection
-            await db.adapter.switch_collection("mangement_segment_tree")
+            await self._switch_collection("mangement_segment_tree")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -469,7 +516,7 @@ class QueryStatisticsTool(EEProductivitiesDatabaseTool):
             db = await self._get_database()
             
             # Switch to statistic collection
-            await db.adapter.switch_collection("statistic")
+            await self._switch_collection("statistic")
             
             # Build filter
             filter_dict = {k: v for k, v in kwargs.items() if v is not None and k != "limit"}
@@ -538,7 +585,7 @@ class GetDatabaseSchemaTool(EEProductivitiesDatabaseTool):
             
             if collection_name:
                 # Get schema for specific collection
-                await db.adapter.switch_collection(collection_name)
+                await self._switch_collection(collection_name)
                 schema_info = await db.get_schema_info()
                 return schema_info
             else:
@@ -548,7 +595,7 @@ class GetDatabaseSchemaTool(EEProductivitiesDatabaseTool):
                 
                 for collection in collections:
                     try:
-                        await db.adapter.switch_collection(collection)
+                        await self._switch_collection(collection)
                         schema_info = await db.get_schema_info()
                         all_schemas[collection] = schema_info
                     except Exception as e:

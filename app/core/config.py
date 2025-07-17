@@ -59,7 +59,6 @@ class Settings(BaseSettings):
     # MongoDB settings (read-only)
     metrics_mongodb_uri: str = Field(default="", env="METRICS_MONGODB_URI")  # For MongoDB
     metrics_mongodb_database: str = Field(default="metrics_db", env="METRICS_MONGODB_DATABASE")
-    metrics_mongodb_collection: str = Field(default="metrics", env="METRICS_MONGODB_COLLECTION")
     
     # PostgreSQL settings (read-only)
     metrics_pg_host: str = Field(default="localhost", env="METRICS_PG_HOST")

@@ -20,13 +20,13 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
         self.config = config
         self.connection_string = config.connection_params.get("connection_string")
         self.database_name = config.connection_params.get("database_name", "ee-productivities")
-        self.collection_name = config.connection_params.get("collection_name", "application_snapshot")
+        self.collection_name = config.connection_params.get("collection_name", None)  # Allow None for dynamic collection switching
         
         self.client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
         self.database = None
         self.collection = None
         
-        # Available collections in ee-productivities database
+        # Available collections in ee-productivities database (for reference only)
         self.available_collections = [
             "application_snapshot",
             "employeed_ratio", 
@@ -49,7 +49,11 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
             await self.client.admin.command('ping')
             
             self.database = self.client[self.database_name]
-            self.collection = self.database[self.collection_name]
+            # Only set collection if collection_name is provided
+            if self.collection_name:
+                self.collection = self.database[self.collection_name]
+            else:
+                self.collection = None  # Will be set when switching collections
             
             # Verify the database exists and has collections
             await self._verify_database()
@@ -60,15 +64,14 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
             raise
     
     async def _verify_database(self) -> None:
-        """Verify that the ee-productivities database exists with expected collections."""
+        """Verify that the ee-productivities database exists and log available collections."""
         try:
             collections = await self.database.list_collection_names()
-            logger.info(f"Available collections: {collections}")
+            logger.info(f"Available collections in {self.database_name}: {collections}")
             
-            # Check if expected collections exist
-            missing_collections = [col for col in self.available_collections if col not in collections]
-            if missing_collections:
-                logger.warning(f"Missing collections: {missing_collections}")
+            # Log the current collection being used
+            if self.collection_name:
+                logger.info(f"Using collection: {self.collection_name}")
             
         except Exception as e:
             logger.error(f"Failed to verify database: {e}")
@@ -112,7 +115,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     async def query_metrics(self, filters: QueryFilter) -> List[MetricTuple]:
         """Query metrics based on filter criteria."""
         if self.collection is None:
-            raise RuntimeError("Database not connected")
+            raise RuntimeError("No collection selected. Use switch_collection() to select a collection first.")
         
         try:
             mongo_filter = self._build_mongo_filter(filters)
@@ -165,8 +168,8 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
                     "sector": doc.get("sector"),
                     "type": doc.get("type"),
                     "organization": doc.get("organization"),
-                    "csiId": doc.get("application", {}).get("csiId"),
-                    "criticality": doc.get("application", {}).get("criticality")
+                    "csiId": doc.get("application", {}).get("csiId") if doc.get("application") else None,
+                    "criticality": doc.get("application", {}).get("criticality") if doc.get("application") else None
                 }
                 values = {
                     "isRetired": doc.get("isRetired", False),
@@ -220,9 +223,23 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
                     "statistics": doc.get("statistics", [])
                 }
             else:
-                # Generic conversion
-                attributes = doc.get("attributes", {})
-                values = doc.get("values", {})
+                # Generic conversion - include all fields as attributes and values
+                # Remove common MongoDB fields and use the rest as attributes
+                exclude_fields = {"_id", "createdAt", "updatedAt", "timestamp", "__v"}
+                attributes = {}
+                values = {}
+                
+                for key, value in doc.items():
+                    if key not in exclude_fields:
+                        # Try to categorize as attribute or value based on common patterns
+                        if isinstance(value, (str, int, float, bool)) or value is None:
+                            attributes[key] = value
+                        else:
+                            values[key] = value
+            
+            # Remove None values from attributes and values to keep them clean
+            attributes = {k: v for k, v in attributes.items() if v is not None}
+            values = {k: v for k, v in values.items() if v is not None}
             
             timestamp = doc.get("timestamp", doc.get("createdAt", datetime.utcnow()))
             
@@ -311,7 +328,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     async def distinct_values(self, field: str, filters: Optional[QueryFilter] = None) -> List[Any]:
         """Get distinct values for a field."""
         if self.collection is None:
-            raise RuntimeError("Database not connected")
+            raise RuntimeError("No collection selected. Use switch_collection() to select a collection first.")
         
         try:
             mongo_filter = {}
@@ -330,7 +347,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     async def execute_native_query(self, query: DatabaseQuery) -> List[Dict[str, Any]]:
         """Execute database-specific native queries (aggregation pipelines for MongoDB)."""
         if self.collection is None:
-            raise RuntimeError("Database not connected")
+            raise RuntimeError("No collection selected. Use switch_collection() to select a collection first.")
         
         try:
             if query.native_query and "pipeline" in query.native_query:
@@ -388,7 +405,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     async def get_schema_info(self) -> Dict[str, Any]:
         """Get schema information for the current collection."""
         if self.collection is None:
-            raise RuntimeError("Database not connected")
+            raise RuntimeError("No collection selected. Use switch_collection() to select a collection first.")
         
         try:
             # Get collection stats
@@ -419,7 +436,7 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     async def explain_query(self, query: DatabaseQuery) -> Dict[str, Any]:
         """Explain query execution plan."""
         if self.collection is None:
-            raise RuntimeError("Database not connected")
+            raise RuntimeError("No collection selected. Use switch_collection() to select a collection first.")
         
         try:
             if query.native_query and "pipeline" in query.native_query:
@@ -452,13 +469,20 @@ class MongoDBEEProductivitiesQueryAdapter(MetricsQueryAdapter):
     
     async def switch_collection(self, collection_name: str) -> None:
         """Switch to a different collection within the same database."""
-        if collection_name not in self.available_collections:
-            raise ValueError(f"Collection {collection_name} not available. Available collections: {self.available_collections}")
-        
-        self.collection_name = collection_name
-        self.collection = self.database[collection_name]
-        
-        logger.info(f"Switched to collection: {collection_name}")
+        try:
+            # Verify the collection exists
+            collections = await self.database.list_collection_names()
+            if collection_name not in collections:
+                logger.warning(f"Collection {collection_name} not found. Available collections: {collections}")
+                # Still allow switching, as the collection might be created later
+            
+            self.collection_name = collection_name
+            self.collection = self.database[collection_name]
+            
+            logger.info(f"Switched to collection: {collection_name}")
+        except Exception as e:
+            logger.error(f"Failed to switch to collection {collection_name}: {e}")
+            raise
     
     async def list_collections(self) -> List[str]:
         """List all available collections in the database."""

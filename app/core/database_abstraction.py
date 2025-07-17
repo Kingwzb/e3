@@ -33,7 +33,7 @@ class DatabaseType(str, Enum):
 class MetricTuple(BaseModel):
     """Represents a metric tuple with attributes and values."""
     attributes: Dict[str, Any] = Field(..., description="Key-value attributes for the metric")
-    values: Dict[str, Union[float, int]] = Field(..., description="One or more metric values")
+    values: Dict[str, Union[float, int, str, bool]] = Field(..., description="One or more metric values (numeric, string, or boolean)")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the metric was recorded")
     
     class Config:
@@ -45,9 +45,9 @@ class MetricTuple(BaseModel):
 class QueryFilter(BaseModel):
     """Generic filter criteria for querying metrics across different database types."""
     attributes: Optional[Dict[str, Any]] = Field(None, description="Attribute filters (key-value pairs)")
-    value_filters: Optional[Dict[str, Dict[str, Union[float, int]]]] = Field(
+    value_filters: Optional[Dict[str, Dict[str, Union[float, int, str, bool]]]] = Field(
         None, 
-        description="Value filters with operators like {'metric_name': {'$gte': 100}}"
+        description="Value filters with operators like {'metric_name': {'$gte': 100}} or {'status': {'$eq': 'active'}}"
     )
     time_range: Optional[Tuple[datetime, datetime]] = Field(None, description="Start and end datetime")
     limit: Optional[int] = Field(None, description="Maximum number of results")
@@ -250,14 +250,9 @@ class MetricsDatabase:
             from app.core.adapters.sqlite_adapter import SQLiteMetricsAdapter
             self.adapter = SQLiteMetricsAdapter(self.config)
         elif self.config.database_type == DatabaseType.MONGODB:
-            # Check if this is for ee-productivities database
-            database_name = self.config.connection_params.get("database_name", "")
-            if database_name == "ee-productivities":
-                from app.core.adapters.mongodb_ee_productivities_adapter import MongoDBEEProductivitiesAdapter
-                self.adapter = MongoDBEEProductivitiesAdapter(self.config)
-            else:
-                from app.core.adapters.mongodb_adapter import MongoDBMetricsAdapter
-                self.adapter = MongoDBMetricsAdapter(self.config)
+            # Use ee-productivities adapter for all MongoDB connections
+            from app.core.adapters.mongodb_ee_productivities_adapter import MongoDBEEProductivitiesAdapter
+            self.adapter = MongoDBEEProductivitiesAdapter(self.config)
         elif self.config.database_type == DatabaseType.POSTGRESQL:
             # PostgreSQL adapter not yet implemented for write operations
             raise ValueError("PostgreSQL adapter for write operations not yet implemented")
@@ -361,14 +356,9 @@ class MetricsQueryDatabase:
             from app.core.adapters.sqlite_query_adapter import SQLiteQueryAdapter
             self.adapter = SQLiteQueryAdapter(self.config)
         elif self.config.database_type == DatabaseType.MONGODB:
-            # Check if this is for ee-productivities database
-            database_name = self.config.connection_params.get("database_name", "")
-            if database_name == "ee-productivities":
-                from app.core.adapters.mongodb_ee_productivities_query_adapter import MongoDBEEProductivitiesQueryAdapter
-                self.adapter = MongoDBEEProductivitiesQueryAdapter(self.config)
-            else:
-                from app.core.adapters.mongodb_query_adapter import MongoDBQueryAdapter
-                self.adapter = MongoDBQueryAdapter(self.config)
+            # Use ee-productivities adapter for all MongoDB connections
+            from app.core.adapters.mongodb_ee_productivities_query_adapter import MongoDBEEProductivitiesQueryAdapter
+            self.adapter = MongoDBEEProductivitiesQueryAdapter(self.config)
         elif self.config.database_type == DatabaseType.POSTGRESQL:
             from app.core.adapters.postgresql_query_adapter import PostgreSQLQueryAdapter
             self.adapter = PostgreSQLQueryAdapter(self.config)
@@ -475,7 +465,7 @@ def get_mongodb_config(
 def get_mongodb_ee_productivities_config(
     connection_string: str,
     database_name: str = "ee-productivities",
-    collection_name: str = "application_snapshot"
+    collection_name: str = None
 ) -> DatabaseConfig:
     """Get MongoDB configuration for ee-productivities database with read-write access."""
     return DatabaseConfig(
@@ -545,9 +535,9 @@ def get_mongodb_query_config(
 def get_mongodb_ee_productivities_query_config(
     connection_string: str,
     database_name: str = "ee-productivities",
-    collection_name: str = "application_snapshot"
+    collection_name: str = None
 ) -> DatabaseConfig:
-    """Get MongoDB configuration for ee-productivities database querying."""
+    """Get MongoDB configuration for ee-productivities database with read-only access."""
     return DatabaseConfig(
         database_type=DatabaseType.MONGODB,
         connection_params={
