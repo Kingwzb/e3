@@ -1,10 +1,10 @@
 """Orchestration and conditional logic for LangGraph workflow."""
 
-from app.models.state import WorkflowState
+from app.models.state import MultiHopState
 from app.utils.logging import logger
 
 
-def should_continue_to_response(state: WorkflowState) -> str:
+def should_continue_to_response(state: MultiHopState) -> str:
     """
     Conditional function to determine workflow routing.
     
@@ -28,9 +28,9 @@ def should_continue_to_response(state: WorkflowState) -> str:
             return "save"
         
         # Check if we have the minimum required data for response generation
-        current_message = state.get("current_message", "")
-        if not current_message.strip():
-            logger.warning("No current message found in state")
+        user_query = state.get("user_query", "")
+        if not user_query.strip():
+            logger.warning("No user query found in state")
             return "save"
         
         # All checks passed, proceed to response generation
@@ -42,7 +42,7 @@ def should_continue_to_response(state: WorkflowState) -> str:
         return "save"
 
 
-def should_continue_to_parallel_processing(state: WorkflowState) -> bool:
+def should_continue_to_parallel_processing(state: MultiHopState) -> bool:
     """
     Conditional function to determine if parallel processing should continue.
     
@@ -76,112 +76,85 @@ def should_continue_to_parallel_processing(state: WorkflowState) -> bool:
         return False
 
 
-def get_workflow_metadata(state: WorkflowState) -> dict:
+def get_workflow_metadata(state: MultiHopState) -> dict:
     """
     Extract metadata about the current workflow state.
-    
-    This is useful for monitoring and debugging workflow execution.
     
     Args:
         state: Current workflow state
         
     Returns:
-        Dictionary with workflow metadata
+        Dict containing workflow metadata
     """
-    try:
-        return {
-            "conversation_id": state.get("conversation_id", "unknown"),
-            "has_rag_context": bool(state.get("rag_context")),
-            "has_metrics_data": bool(state.get("metrics_data")),
-            "conversation_length": len(state.get("messages", [])),
-            "has_error": bool(state.get("error")),
-            "has_final_response": bool(state.get("final_response")),
-            "message_length": len(state.get("current_message", "")),
-        }
-    except Exception as e:
-        logger.error(f"Error extracting workflow metadata: {str(e)}")
-        return {"error": str(e)}
+    return {
+        "request_id": state.get("request_id"),
+        "session_id": state.get("session_id"),
+        "user_query": state.get("user_query"),
+        "subqueries": state.get("subqueries"),
+        "detected_docs": state.get("detected_docs"),
+        "final_answer_status": "generated" if state.get("final_answer") else "pending"
+    }
 
 
-def should_route_to_metrics(state: WorkflowState) -> str:
+def should_route_to_metrics(state: MultiHopState) -> str:
     """
-    Conditional function to determine routing after planner node.
+    Conditional function to determine routing based on planner node decision.
     
-    This function routes to metrics extraction, RAG, or both based on
-    the planner node's decision.
+    This function analyzes the planning data from the planner node and determines
+    whether to route to metrics extraction, RAG extraction, or both.
     
     Args:
         state: Current workflow state with planning data
         
     Returns:
-        String indicating the next node to execute ("metrics_extraction", "rag_extraction", or "both")
+        String indicating the next node to execute:
+        - "metrics_extraction": Only database queries needed
+        - "rag_extraction": Only RAG context needed
+        - "both": Both database queries and RAG context needed
+        - "response_generation": No extraction needed
     """
     try:
-        # Check if planner has determined we need metrics extraction
-        trigger_metrics = state.get("trigger_metrics", False)
-        trigger_rag = state.get("trigger_rag", True)  # Default to True for RAG
+        logger.info(f"Routing - Checking planner decision for session: {state['session_id']}")
+        
+        # Check for subqueries (MultiHopState format)
+        subqueries = state.get("subqueries", {})
+        detected_docs = state.get("detected_docs", [])
+        
+        # Determine what's needed based on subqueries
+        # Check for database-related subquery keys
+        db_related_keys = ["Database", "employee_ratio", "application_snapshot", "statistic", "enabler_csi_snapshots", "employee_tree_archived", "management_segment_tree"]
+        needs_database = any(key in subqueries for key in db_related_keys) or any(db_term in key.lower() for key in subqueries.keys() for db_term in ["employee_ratio", "application_snapshot", "statistic", "enabler_csi_snapshots", "employee_tree_archived", "management_segment_tree"])
+        needs_rag = len(detected_docs) > 0 or any(key != "Database" and not any(db_term in key.lower() for db_term in ["employee_ratio", "application_snapshot", "statistic", "enabler_csi_snapshots", "employee_tree_archived", "management_segment_tree"]) for key in subqueries.keys())
+        
+        logger.info(f"Routing - Subqueries analysis: needs_database={needs_database}, needs_rag={needs_rag}")
+        logger.info(f"Routing - Subqueries keys: {list(subqueries.keys())}")
+        logger.info(f"Routing - Detected docs: {detected_docs}")
+        
+        # Fallback checks for backward compatibility
         planning_data = state.get("planning_data", {})
+        trigger_metrics = planning_data.get("trigger_metrics", False)
+        trigger_rag = planning_data.get("trigger_rag", True)  # Default to True for RAG
         
-        # Also check planning_data for triggers (fallback)
-        if not trigger_metrics:
-            trigger_metrics = planning_data.get("trigger_metrics", False)
-        if not trigger_rag:
-            trigger_rag = planning_data.get("trigger_rag", True)
+        logger.info(f"Routing - Fallback planning data: trigger_metrics={trigger_metrics}, trigger_rag={trigger_rag}")
         
-        # Additional fallback: check needs_metrics and needs_rag
-        if not trigger_metrics:
-            trigger_metrics = state.get("needs_metrics", False)
-        if not trigger_rag:
-            trigger_rag = state.get("needs_rag", True)
-        
-        # Final fallback: check planning_data.needs_database_query
-        if not trigger_metrics and planning_data.get("needs_database_query", False):
-            trigger_metrics = True
-        
-        # Final fallback: if we have planning data with needs_database_query=True, force trigger_metrics=True
-        logger.info(f"Routing - Checking final fallback: state={state} needs_database_query={planning_data.get('needs_database_query', False)}, confidence={planning_data.get('confidence', 0.0)}")
-        if planning_data.get("needs_database_query", False) and planning_data.get("confidence", 0.0) > 0.5:
-            trigger_metrics = True
-            logger.info(f"Routing - Forcing trigger_metrics=True based on planning data")
-        else:
-            logger.info(f"Routing - Final fallback condition not met")
-        
-        # Additional fallback: check direct state values
-        direct_needs_query = state.get("needs_database_query", False)
-        direct_confidence = state.get("confidence", 0.0)
-        logger.info(f"Routing - Checking direct values: needs_database_query={direct_needs_query}, confidence={direct_confidence}")
-        if direct_needs_query and direct_confidence > 0.5:
-            trigger_metrics = True
-            logger.info(f"Routing - Forcing trigger_metrics=True based on direct state values")
-        
-        # Final aggressive fallback: if we have any indication of database query need, trigger metrics
-        # This is a last resort to ensure database queries are handled
-        if not trigger_metrics:
-            # Check if the message contains database-related keywords
-            current_message = state.get("current_message", "").lower()
-            db_keywords = ["database", "db", "query", "soeid", "employee", "list", "get", "find", "show"]
-            has_db_keywords = any(keyword in current_message for keyword in db_keywords)
-            
-            if has_db_keywords:
-                trigger_metrics = True
-                logger.info(f"Routing - Forcing trigger_metrics=True based on message keywords: {current_message}")
-        
-        # Debug logging
-        logger.info(f"Routing decision - trigger_metrics: {trigger_metrics}, trigger_rag: {trigger_rag}")
-        logger.info(f"Planning data triggers - trigger_metrics: {planning_data.get('trigger_metrics', False)}, trigger_rag: {planning_data.get('trigger_rag', True)}")
-        logger.info(f"Needs fallback - needs_metrics: {state.get('needs_metrics', False)}, needs_rag: {state.get('needs_rag', True)}")
-        logger.info(f"Database query needed: {planning_data.get('needs_database_query', False)}")
-        logger.info(f"Planning data content: {planning_data}")
-        
-        # Determine routing based on what's needed
-        if trigger_metrics and trigger_rag:
+        # Use subqueries as primary decision, fallback to planning_data
+        if needs_database and needs_rag:
             logger.info("Planner determined both metrics and RAG extraction are needed")
             return "both"
-        elif trigger_metrics:
+        elif needs_database:
             logger.info("Planner determined only metrics extraction is needed")
             return "metrics_extraction"
-        elif trigger_rag:
+        elif needs_rag:
             logger.info("Planner determined only RAG extraction is needed")
+            return "rag_extraction"
+        elif trigger_metrics and trigger_rag:
+            logger.info("Fallback: Planning data indicates both metrics and RAG needed")
+            return "both"
+        elif trigger_metrics:
+            logger.info("Fallback: Planning data indicates only metrics needed")
+            return "metrics_extraction"
+        elif trigger_rag:
+            logger.info("Fallback: Planning data indicates only RAG needed")
             return "rag_extraction"
         else:
             logger.info("Planner determined no extraction is needed")

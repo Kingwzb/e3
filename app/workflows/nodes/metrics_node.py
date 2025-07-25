@@ -1,86 +1,70 @@
-"""Metrics extraction node for LangGraph workflow using dynamic database tool."""
+"""Metrics extraction node for LangGraph workflow."""
 
 import json
-import os
-from typing import Dict, Any, List, Optional
-from app.models.state import WorkflowState
-from app.tools.dynamic_db_tool import create_dynamic_db_tool
-from app.core.llm import llm_client
+from typing import Dict, Any, List
 
+from app.models.state import MultiHopState
+from app.core.llm import llm_client
+from app.tools.dynamic_db_tool import create_dynamic_db_tool
 from app.utils.logging import logger
 
 
 def _load_unified_schema() -> str:
-    """Load the unified schema from file."""
+    """Load the unified schema document."""
     try:
         schema_path = "schemas/unified_schema.txt"
-        with open(schema_path, "r") as f:
-            schema = f.read()
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema_content = f.read()
         logger.info(f"Loaded unified schema from {schema_path}")
-        return schema
-    except FileNotFoundError:
-        logger.error(f"Unified schema file not found: {schema_path}")
-        raise FileNotFoundError(f"Unified schema file not found: {schema_path}")
+        return schema_content
     except Exception as e:
         logger.error(f"Failed to load unified schema: {e}")
         raise
 
 
-def _should_extract_metrics(state: WorkflowState) -> bool:
+def _should_extract_metrics(state: MultiHopState) -> bool:
     """
-    Determine if metrics extraction is needed based on planner node decision.
+    Determine if metrics extraction is needed based on subqueries.
     
-    Args:
-        state: Workflow state containing planning data
-        
-    Returns:
-        True if metrics extraction is needed, False otherwise
+    This function checks if there are database subqueries that need to be executed.
     """
-    # Check for trigger_metrics at top level (from planner node)
-    if state.get("trigger_metrics", False):
-        logger.info("Metrics extraction triggered by trigger_metrics=True")
+    subqueries = state.get("subqueries", {})
+    
+    # Check if there are database subqueries
+    if "Database" in subqueries:
+        logger.info("Database subqueries found, metrics extraction needed")
         return True
     
-    # Check for needs_metrics at top level (alternative field)
-    if state.get("needs_metrics", False):
-        logger.info("Metrics extraction triggered by needs_metrics=True")
-        return True
+    # Check for any subquery keys that contain database-related terms
+    db_related_keys = ["employee_ratio", "application_snapshot", "statistic", "enabler_csi_snapshots", "employee_tree_archived", "management_segment_tree"]
+    for key in subqueries.keys():
+        if any(db_term in key.lower() for db_term in db_related_keys):
+            logger.info(f"Database-related subquery found: {key}, metrics extraction needed")
+            return True
     
-    # Fallback to planning_data.trigger_metrics if not at top level
+    # Fallback checks for backward compatibility
     planning_data = state.get("planning_data", {})
-    if planning_data.get("trigger_metrics", False) or planning_data.get("needs_metrics", False):
-        logger.info("Metrics extraction triggered by planning_data")
+    if planning_data.get("needs_database_query", False):
+        logger.info("Planning data indicates database query needed")
         return True
     
-    # Additional fallback: check direct state values
-    if state.get("needs_database_query", False) and state.get("confidence", 0.0) > 0.5:
-        logger.info("Metrics extraction triggered by direct state values")
+    # Check for database-related keywords in user query
+    user_query = state.get("user_query", "").lower()
+    db_keywords = ["database", "db", "soeid", "employee", "list", "get", "find", "show", "query"]
+    if any(keyword in user_query for keyword in db_keywords):
+        logger.info("Database keywords found in user query")
         return True
     
-    # Final fallback: check planning_data.needs_database_query
-    if planning_data.get("needs_database_query", False) and planning_data.get("confidence", 0.0) > 0.5:
-        logger.info("Metrics extraction triggered by planning_data.needs_database_query")
-        return True
-    
-    # Last resort: check message keywords
-    current_message = state.get("current_message", "").lower()
-    db_keywords = ["database", "db", "query", "soeid", "employee", "list", "get", "find", "show"]
-    has_db_keywords = any(keyword in current_message for keyword in db_keywords)
-    
-    if has_db_keywords:
-        logger.info(f"Metrics extraction triggered by message keywords: {current_message}")
-        return True
-    
-    logger.info("No metrics extraction required - all checks failed")
+    logger.info("No metrics extraction needed")
     return False
 
 
-async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
+async def metrics_extraction_node(state: MultiHopState) -> Dict[str, Any]:
     """
     LangGraph node that performs data extraction using dynamic database tool.
     
     This node:
-    1. Determines if the user's message requires database querying
+    1. Determines if the user's query requires database querying
     2. If needed, uses the dynamic database tool to generate and execute queries
     3. Returns extracted data in a structured format
     
@@ -90,15 +74,15 @@ async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
     - Handles complex queries with joins and aggregations
     """
     try:
-        logger.info(f"Metrics node processing message for conversation: {state['conversation_id']}")
+        logger.info(f"Metrics node processing query for session: {state['session_id']}")
         
-        current_message = state["current_message"]
-        conversation_history = state.get("messages", [])
+        user_query = state["user_query"]
+        conversation_history = state.get("conversation_history", "")
         
-        # Check if metrics extraction is needed based on planner decision
+        # Check if metrics extraction is needed based on subqueries
         if not _should_extract_metrics(state):
-            logger.info("No metrics extraction required based on planner decision")
-            return {"metrics_data": None}
+            logger.info("No metrics extraction required based on subqueries")
+            return {"subquery_responses": {}}
         
         # Load unified schema
         unified_schema = _load_unified_schema()
@@ -118,15 +102,15 @@ async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
             logger.error(f"DEBUG: Tool creation traceback: {traceback.format_exc()}")
             raise
         
-        logger.info(f"Using dynamic database tool for message: {current_message[:100]}...")
+        logger.info(f"Using dynamic database tool for query: {user_query[:100]}...")
         
         # Execute the dynamic database query
         try:
-            logger.info(f"DEBUG: About to prepare conversation context for better query generation, state: {state}, conversation_history: {conversation_history}")
+            logger.info(f"DEBUG: About to prepare conversation context for better query generation")
             # Prepare conversation context for better query generation
             context_messages = []
             if conversation_history:
-                # Use last few messages for context
+                # Use conversation history for context
                 context_limit_raw = state.get("metrics_context_limit", 3)
                 logger.info(f"DEBUG: context_limit_raw: {context_limit_raw}, type: {type(context_limit_raw)}")
                 
@@ -146,202 +130,127 @@ async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
                     logger.info(f"DEBUG: Using context_limit: {context_limit}")
                 
                 logger.info(f"DEBUG: Final context_limit: {context_limit}, type: {type(context_limit)}")
-                for msg in conversation_history[-context_limit:]:
-                    context_messages.append(f"{msg['role']}: {msg['content']}")
+                
+                # Parse conversation history to get recent messages
+                lines = conversation_history.strip().split('\n')
+                recent_lines = lines[-context_limit * 2:]  # Each message has 2 lines (role and content)
+                for line in recent_lines:
+                    if line.strip():
+                        context_messages.append(line.strip())
             
             # Create enhanced prompt with context
-            enhanced_prompt = current_message
+            enhanced_prompt = user_query
             if context_messages:
                 context_text = "\n".join(context_messages)
-                enhanced_prompt = f"Context:\n{context_text}\n\nCurrent request: {current_message}"
-            logger.info(f"DEBUG: About to call dynamic_tool._arun")
-            logger.info(f"DEBUG: enhanced_prompt length: {len(enhanced_prompt)}")
-            logger.info(f"DEBUG: unified_schema length: {len(unified_schema)}")
+                enhanced_prompt = f"Context from previous conversation:\n{context_text}\n\nCurrent query: {user_query}"
             
-            # Check state values that might be None
-            metrics_limit_raw = state.get("metrics_limit")
-            logger.info(f"DEBUG: metrics_limit_raw: {metrics_limit_raw}, type: {type(metrics_limit_raw)}")
-            metrics_limit = state.get("metrics_limit", 100)
-            logger.info(f"DEBUG: metrics_limit: {metrics_limit}, type: {type(metrics_limit)}")
+            # Get limit parameter
+            limit_param = state.get("metrics_limit", 100)
+            logger.info(f"DEBUG: limit_param: {limit_param}, type: {type(limit_param)}")
             
-            logger.info(f"DEBUG: dynamic_tool type: {type(dynamic_tool)}")
+            # Ensure limit_param is a valid integer
+            if limit_param is None:
+                limit_param = 100
+                logger.info(f"DEBUG: limit_param is None, using default 100")
+            elif not isinstance(limit_param, int):
+                try:
+                    limit_param = int(limit_param)
+                    logger.info(f"DEBUG: Converted limit_param to int: {limit_param}")
+                except (ValueError, TypeError):
+                    limit_param = 100
+                    logger.info(f"DEBUG: Could not convert limit_param to int, using default 100")
             
+            logger.info(f"DEBUG: Final limit_param: {limit_param}, type: {type(limit_param)}")
+            
+            # Check other parameters
             try:
+                logger.info(f"DEBUG: enhanced_prompt type: {type(enhanced_prompt)}")
+                logger.info(f"DEBUG: enhanced_prompt is None: {enhanced_prompt is None}")
+                logger.info(f"DEBUG: unified_schema type: {type(unified_schema)}")
+                logger.info(f"DEBUG: unified_schema is None: {unified_schema is None}")
                 
-                logger.info(f"DEBUG: Calling dynamic_tool._arun with parameters:")
+                # Ensure parameters are not None
+                if enhanced_prompt is None:
+                    logger.error(f"DEBUG: enhanced_prompt is None!")
+                    enhanced_prompt = user_query
                 
-                # Debug enhanced_prompt safely
-                try:
-                    prompt_preview = enhanced_prompt[:100] if enhanced_prompt else "None"
-                    logger.info(f"DEBUG: - user_prompt: {prompt_preview}...")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error getting prompt preview: {e}")
-                    logger.info(f"DEBUG: - user_prompt: [ERROR]")
+                if unified_schema is None:
+                    logger.error(f"DEBUG: unified_schema is None!")
+                    raise ValueError("unified_schema is None")
                 
-                # Debug unified_schema safely
-                try:
-                    schema_length = len(unified_schema) if unified_schema else "None"
-                    logger.info(f"DEBUG: - unified_schema: {schema_length} chars")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error getting schema length: {e}")
-                    logger.info(f"DEBUG: - unified_schema: [ERROR]")
-                
-                # Debug limit safely
-                try:
-                    limit_value = state.get('metrics_limit', 100)
-                    logger.info(f"DEBUG: - limit: {limit_value}")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error getting limit: {e}")
-                    logger.info(f"DEBUG: - limit: [ERROR]")
-                
-                logger.info(f"DEBUG: - include_aggregation: True")
-                logger.info(f"DEBUG: - join_strategy: lookup")
-                
-                logger.info(f"DEBUG: About to call await dynamic_tool._arun")
-                logger.info(f"DEBUG: dynamic_tool._arun method: {dynamic_tool._arun}")
-                logger.info(f"DEBUG: dynamic_tool._arun type: {type(dynamic_tool._arun)}")
-                
-                # Check if the method is callable
-                if not callable(dynamic_tool._arun):
-                    logger.error(f"DEBUG: dynamic_tool._arun is not callable!")
-                    raise RuntimeError("dynamic_tool._arun is not callable")
-                
-                # Prepare the limit parameter carefully
-                try:
-                    limit_param = state.get("metrics_limit", 100)
-                    logger.info(f"DEBUG: limit_param: {limit_param}, type: {type(limit_param)}")
-                    
-                    # Ensure limit is a valid integer
-                    if limit_param is None:
-                        logger.warning(f"DEBUG: limit_param is None, using default 100")
-                        limit_param = 100
-                    elif not isinstance(limit_param, int):
-                        logger.warning(f"DEBUG: limit_param is not int, converting from {type(limit_param)}")
-                        try:
-                            limit_param = int(limit_param)
-                        except (ValueError, TypeError):
-                            logger.warning(f"DEBUG: Could not convert limit_param to int, using default 100")
-                            limit_param = 100
-                    
-                    logger.info(f"DEBUG: Final limit_param: {limit_param}, type: {type(limit_param)}")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error preparing limit_param: {e}")
-                    logger.error(f"DEBUG: Error type: {type(e)}")
-                    import traceback
-                    logger.error(f"DEBUG: Limit preparation traceback: {traceback.format_exc()}")
-                    limit_param = 100  # Use safe default
-                
-                # Check other parameters
-                try:
-                    logger.info(f"DEBUG: enhanced_prompt type: {type(enhanced_prompt)}")
-                    logger.info(f"DEBUG: enhanced_prompt is None: {enhanced_prompt is None}")
-                    logger.info(f"DEBUG: unified_schema type: {type(unified_schema)}")
-                    logger.info(f"DEBUG: unified_schema is None: {unified_schema is None}")
-                    
-                    # Ensure parameters are not None
-                    if enhanced_prompt is None:
-                        logger.error(f"DEBUG: enhanced_prompt is None!")
-                        enhanced_prompt = current_message
-                    
-                    if unified_schema is None:
-                        logger.error(f"DEBUG: unified_schema is None!")
-                        raise ValueError("unified_schema is None")
-                    
-                    logger.info(f"DEBUG: About to call _arun with validated parameters")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error validating parameters: {e}")
-                    logger.error(f"DEBUG: Error type: {type(e)}")
-                    import traceback
-                    logger.error(f"DEBUG: Parameter validation traceback: {traceback.format_exc()}")
-                    raise
-                
-                result = await dynamic_tool._arun(
-                    user_prompt=enhanced_prompt,
-                    unified_schema=unified_schema,
-                    limit=limit_param,
-                    include_aggregation=True,
-                    join_strategy="lookup"
-                )
-                
-                logger.info(f"DEBUG: dynamic_tool._arun completed successfully")
-                logger.info(f"DEBUG: result type: {type(result)}")
-                logger.info(f"DEBUG: result length: {len(result) if isinstance(result, str) else 'Not a string'}")
-                
-            except Exception as arun_error:
-                logger.error(f"DEBUG: Error in dynamic_tool._arun call: {arun_error}")
-                logger.error(f"DEBUG: Error type: {type(arun_error)}")
+                logger.info(f"DEBUG: About to call _arun with validated parameters")
+            except Exception as e:
+                logger.error(f"DEBUG: Error validating parameters: {e}")
+                logger.error(f"DEBUG: Error type: {type(e)}")
                 import traceback
-                logger.error(f"DEBUG: _arun call traceback: {traceback.format_exc()}")
+                logger.error(f"DEBUG: Parameter validation traceback: {traceback.format_exc()}")
                 raise
             
-            # Parse the result
-            if result.startswith("Error:"):
-                logger.error(f"Dynamic database tool error: {result}")
-                metrics_data = {
-                    "dynamic_db_query": {
-                        "error": result,
-                        "user_prompt": current_message,
-                        "tool_type": "dynamic_db"
-                    }
-                }
-            else:
-                # Parse the JSON result
-                try:
-                    parsed_result = json.loads(result)
-                    metrics_data = {
-                        "dynamic_db_query": {
-                            "result": parsed_result,
-                            "user_prompt": current_message,
-                            "tool_type": "dynamic_db",
-                            "config": {
-                                "database": "ee-productivities",
-                                "tool_name": "dynamic_db_query",
-                                "schema_used": "unified_schema.txt"
-                            }
-                        }
-                    }
-                    logger.info(f"Successfully executed dynamic database query")
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse dynamic database result: {e}")
-                    metrics_data = {
-                        "dynamic_db_query": {
-                            "error": f"Failed to parse result: {str(e)}",
-                            "raw_result": result,
-                            "user_prompt": current_message,
-                            "tool_type": "dynamic_db"
-                        }
-                    }
+            result = await dynamic_tool._arun(
+                user_prompt=enhanced_prompt,
+                unified_schema=unified_schema,
+                limit=limit_param,
+                include_aggregation=True,
+                join_strategy="lookup"
+            )
             
-        except Exception as tool_error:
-            logger.error(f"Error executing dynamic database tool: {tool_error}")
-            metrics_data = {
-                "dynamic_db_query": {
-                    "error": str(tool_error),
-                    "user_prompt": current_message,
+            logger.info(f"DEBUG: dynamic_tool._arun completed successfully")
+            logger.info(f"DEBUG: result type: {type(result)}")
+            logger.info(f"DEBUG: result length: {len(result) if isinstance(result, str) else 'Not a string'}")
+            
+        except Exception as arun_error:
+            logger.error(f"DEBUG: Error in dynamic_tool._arun call: {arun_error}")
+            logger.error(f"DEBUG: Error type: {type(arun_error)}")
+            import traceback
+            logger.error(f"DEBUG: _arun call traceback: {traceback.format_exc()}")
+            raise
+        
+        # Parse the result
+        if result.startswith("Error:"):
+            logger.error(f"Dynamic database tool error: {result}")
+            subquery_responses = {
+                "Database": {
+                    "error": result,
+                    "user_prompt": user_query,
                     "tool_type": "dynamic_db"
                 }
             }
-        
-        # Return only the keys this node modifies
-        result = {"metrics_data": metrics_data}
-        
-        if metrics_data and "error" not in metrics_data.get("dynamic_db_query", {}):
-            logger.info(f"Metrics extraction completed successfully")
         else:
-            logger.info("Metrics extraction completed with errors")
+            # Parse the JSON result
+            try:
+                parsed_result = json.loads(result)
+                subquery_responses = {
+                    "Database": {
+                        "result": parsed_result,
+                        "user_prompt": user_query,
+                        "tool_type": "dynamic_db",
+                        "config": {
+                            "database": "ee-productivities",
+                            "tool_name": "dynamic_db_query",
+                            "schema_used": "unified_schema.txt"
+                        }
+                    }
+                }
+                logger.info(f"Successfully executed dynamic database query")
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse dynamic database result: {e}")
+                subquery_responses = {
+                    "Database": {
+                        "error": f"Failed to parse result: {str(e)}",
+                        "raw_result": result,
+                        "user_prompt": user_query,
+                        "tool_type": "dynamic_db"
+                    }
+                }
         
-        return result
+        return {"subquery_responses": subquery_responses}
         
     except Exception as e:
         logger.error(f"Error in metrics extraction node: {str(e)}")
         return {
-            "metrics_data": {
-                "dynamic_db_query": {
-                    "error": f"Metrics extraction failed: {str(e)}",
-                    "user_prompt": state.get("current_message", ""),
-                    "tool_type": "dynamic_db"
-                }
-            }
+            "error": f"Metrics extraction failed: {str(e)}",
+            "subquery_responses": {}
         }
 
 

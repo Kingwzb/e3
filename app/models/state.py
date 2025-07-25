@@ -32,6 +32,21 @@ class WorkflowState(TypedDict):
     metrics_tools_config: Optional[Dict[str, Any]]  # Custom configuration for metrics tools
 
 
+class MultiHopState(TypedDict):
+    """Multi-hop reasoning workflow state."""
+    request_id: str
+    session_id: str
+    user_query: str
+    formatted_user_query: str
+    conversation_history: str  # Conversation history as formatted string
+    subqueries: Dict[str, List[str]]  # Document/DB -> List of queries
+    retrieved_docs: Dict[str, Dict[str, List]]  # Document/DB -> Retrieved content
+    db_schema: str
+    subquery_responses: Dict[str, Dict]  # Query -> Response
+    final_answer: Dict[str, Any]
+    detected_docs: List[str]  # List of detected relevant RAG documents
+
+
 class RAGResult(BaseModel):
     """RAG extraction result."""
     context: str = Field(..., description="Retrieved context from vector database")

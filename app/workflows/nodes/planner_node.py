@@ -1,97 +1,147 @@
-"""Planner node for LangGraph workflow that determines if database queries are needed."""
+"""Planner node for LangGraph workflow that determines intent and routes to appropriate nodes."""
 
 import json
-import os
-from typing import Dict, Any, List, Optional
-from app.models.state import WorkflowState
+import re
+from typing import Dict, Any, List
+
+from app.models.state import MultiHopState
 from app.core.llm import llm_client
 from app.utils.logging import logger
 
 
 def _load_unified_schema() -> str:
-    """Load the unified schema from file."""
+    """Load the unified schema document."""
     try:
         schema_path = "schemas/unified_schema.txt"
-        with open(schema_path, "r") as f:
-            schema = f.read()
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema_content = f.read()
         logger.info(f"Loaded unified schema from {schema_path}")
-        return schema
-    except FileNotFoundError:
-        logger.error(f"Unified schema file not found: {schema_path}")
-        raise FileNotFoundError(f"Unified schema file not found: {schema_path}")
+        return schema_content
     except Exception as e:
         logger.error(f"Failed to load unified schema: {e}")
         raise
 
 
-def _create_planning_prompt(user_message: str, unified_schema: str) -> str:
-    """Create a prompt for the LLM to determine if a database query is needed."""
-    return f"""You are a database query planner. Your task is to analyze a user's message and determine if they need to query a MongoDB database.
+def _create_planning_prompt(user_query: str, conversation_history: str, unified_schema: str) -> str:
+    """Create a prompt for the LLM to analyze the user query and determine subqueries."""
+    
+    # Format conversation history for context
+    history_context = ""
+    if conversation_history and conversation_history.strip():
+        history_context = f"\nCONVERSATION HISTORY:\n{conversation_history}\n"
+    
+    prompt = f"""
+You are an intelligent query planner that analyzes user queries and breaks them down into subqueries for different data sources.
 
-DATABASE SCHEMA:
+CURRENT USER QUERY: {user_query}
+{history_context}
+UNIFIED SCHEMA:
 {unified_schema}
 
-USER MESSAGE:
-{user_message}
+Your task is to:
+1. Analyze the user query and conversation history to understand what information is needed
+2. Consider the context from previous messages to provide more relevant subqueries
+3. Identify which documents/databases are relevant based on the full conversation context
+4. Generate specific subqueries for each relevant source
+5. Detect relevant RAG documents that should be searched
 
-ANALYSIS TASK:
-1. Read the user's message carefully
-2. Review the available database collections and their fields
-3. Determine if the user is asking for:
-   - Data retrieval from the database
-   - Information about applications, employees, ratios, etc.
-   - Statistics, counts, or metrics
-   - Any information that would require querying the database
+IMPORTANT: Consider the conversation history when planning:
+- If the user is asking follow-up questions, reference previous context
+- If they're refining their request, build upon earlier queries
+- If they're asking for clarification, consider what was discussed before
+- Use the conversation context to make subqueries more specific and relevant
 
-AVAILABLE COLLECTIONS:
-- application_snapshot: Contains application data with criticality, CSI IDs, etc.
-- employee_ratio: Contains employee data with ratios and headcount information
-- soe_achievement: Contains achievement data
-
-RESPONSE FORMAT:
-Return a JSON object with the following structure:
+Return your analysis as a JSON object with the following structure:
 {{
-    "needs_database_query": true/false,
-    "reasoning": "Explanation of why a database query is or is not needed",
-    "relevant_collections": ["list", "of", "relevant", "collections"],
-    "query_type": "find|aggregate|count|analysis",
-    "confidence": 0.0-1.0
+    "subqueries": {{
+        "Database": [
+            "specific question about database data",
+            "another database question if needed"
+        ],
+        "Document1": [
+            "specific question about this document",
+            "another question about this document"
+        ],
+        "Document2": [
+            "specific question about this document"
+        ]
+    }},
+    "detected_docs": [
+        "document1_name",
+        "document2_name"
+    ],
+    "reasoning": "explanation of why these subqueries were chosen, considering conversation history",
+    "confidence": 0.9
 }}
 
-EXAMPLES:
-- "Show me applications with high criticality" → needs_database_query: true
-- "What's the weather like?" → needs_database_query: false
-- "How many employees are there?" → needs_database_query: true
-- "Tell me a joke" → needs_database_query: false
-- "Find applications in the finance sector" → needs_database_query: true
+IMPORTANT RULES:
+- Only include sources that are actually relevant to the user query and conversation context
+- Generate specific, focused subqueries that can be answered by each source
+- For database queries, be specific about what data to retrieve
+- For document queries, ask specific questions about the document content
+- If no database query is needed, omit the "Database" key
+- If no document queries are needed, omit document keys
+- detected_docs should list the names of RAG documents that should be searched
+- Consider conversation history to make queries more contextual and relevant
 
-Respond with only the JSON object, no additional text."""
+Examples:
+- For "give me unique soeId list from database": Include Database subquery
+- For "explain the employee structure": Include relevant document subqueries
+- For "what are the critical applications": Include both Database and document subqueries
+- For follow-up questions like "show me more details": Reference previous context
+
+Return only the JSON object, no additional text.
+"""
+    return prompt
 
 
-async def planner_node(state: WorkflowState) -> Dict[str, Any]:
+def _update_conversation_history(current_history: str, user_query: str, assistant_response: str = None) -> str:
+    """Update conversation history by appending the current user query and optionally the assistant response."""
+    if not current_history or not current_history.strip():
+        # If no history exists, start with the current query
+        if assistant_response:
+            return f"1. user: {user_query}\n2. assistant: {assistant_response}"
+        else:
+            return f"1. user: {user_query}"
+    
+    # Count existing messages to get the next number
+    lines = current_history.strip().split('\n')
+    next_number = len(lines) + 1
+    
+    # Append the new user query
+    updated_history = current_history.strip() + f"\n{next_number}. user: {user_query}"
+    
+    # If assistant response is provided, append it too
+    if assistant_response:
+        updated_history += f"\n{next_number + 1}. assistant: {assistant_response}"
+    
+    return updated_history
+
+
+async def planner_node(state: MultiHopState) -> Dict[str, Any]:
     """
-    LangGraph node that plans whether database queries are needed.
+    LangGraph node that analyzes user queries and determines subqueries for multi-hop reasoning.
     
     This node:
-    1. Analyzes the user's message using LLM
-    2. Reviews the database schema
-    3. Determines if a database query is needed
-    4. Provides reasoning and planning information
-    
-    Returns:
-        Dict with planning information including whether to trigger metrics node
+    1. Analyzes the user query and conversation history to understand intent
+    2. Identifies relevant data sources (documents and databases)
+    3. Generates specific subqueries for each source
+    4. Detects relevant RAG documents to search
+    5. Updates conversation history with the current user query
+    6. Returns structured subqueries and detected documents
     """
     try:
-        logger.info(f"Planner node processing message for conversation: {state['conversation_id']}")
+        user_query = state["user_query"]
+        conversation_history = state.get("conversation_history", "")
         
-        current_message = state["current_message"]
-        conversation_history = state.get("messages", [])
+        logger.info(f"Planner node processing query: {user_query}")
+        logger.info(f"Planner node using conversation history: {len(conversation_history)} characters")
         
-        # Load unified schema
+        # Load unified schema for database understanding
         unified_schema = _load_unified_schema()
         
-        # Create planning prompt
-        planning_prompt = _create_planning_prompt(current_message, unified_schema)
+        # Create planning prompt with conversation history
+        planning_prompt = _create_planning_prompt(user_query, conversation_history, unified_schema)
         
         # Get LLM response for planning
         try:
@@ -137,40 +187,30 @@ async def planner_node(state: WorkflowState) -> Dict[str, Any]:
                             logger.error(f"No JSON found in response: {response_content[:200]}...")
                             raise ValueError("No valid JSON found in LLM response")
                 
-                logger.info(f"Planning analysis completed: {planning_result.get('needs_database_query', False)}")
-                
                 # Extract planning information
-                needs_query = planning_result.get("needs_database_query", False)
+                subqueries = planning_result.get("subqueries", {})
+                detected_docs = planning_result.get("detected_docs", [])
                 reasoning = planning_result.get("reasoning", "No reasoning provided")
-                relevant_collections = planning_result.get("relevant_collections", [])
-                query_type = planning_result.get("query_type", "unknown")
                 confidence = planning_result.get("confidence", 0.0)
                 
-                planning_data = {
-                    "needs_database_query": needs_query,
-                    "reasoning": reasoning,
-                    "relevant_collections": relevant_collections,
-                    "query_type": query_type,
-                    "confidence": confidence,
-                    "user_message": current_message,
-                    "schema_used": "unified_schema.txt"
-                }
+                logger.info(f"Planning analysis completed: subqueries={len(subqueries)}, detected_docs={len(detected_docs)}")
+                logger.info(f"Planning determined: subqueries={list(subqueries.keys())}, detected_docs={detected_docs} (confidence: {confidence})")
+                logger.info(f"Planning reasoning: {reasoning[:100]}...")
                 
-                # Determine next steps - can route to both metrics and RAG
-                trigger_metrics = needs_query and confidence > 0.5
-                trigger_rag = True  # Always trigger RAG for general context
-                
-                logger.info(f"Planning determined: metrics={trigger_metrics}, rag={trigger_rag} (confidence: {confidence})")
+                # Update conversation history with the current user query only
+                # (Assistant response will be added by the final response node)
+                updated_conversation_history = _update_conversation_history(conversation_history, user_query)
+                logger.info(f"Updated conversation history: {len(updated_conversation_history)} characters")
                 
                 result = {
-                    "planning_data": planning_data,
-                    "trigger_metrics": trigger_metrics,
-                    "trigger_rag": trigger_rag,
-                    "needs_metrics": trigger_metrics,
-                    "needs_rag": trigger_rag,
-                    # Also set the key values directly in the state for easier access
-                    "needs_database_query": needs_query,
-                    "confidence": confidence
+                    "subqueries": subqueries,
+                    "detected_docs": detected_docs,
+                    "formatted_user_query": user_query,
+                    "db_schema": unified_schema,
+                    "subquery_responses": {},
+                    "retrieved_docs": {},
+                    "final_answer": {},
+                    "conversation_history": updated_conversation_history
                 }
                 
                 logger.info(f"Planner node returning: {result}")
@@ -181,25 +221,20 @@ async def planner_node(state: WorkflowState) -> Dict[str, Any]:
                 logger.error(f"Raw response: {response.get('content', '')}")
                 
                 # Fallback to keyword-based detection
-                fallback_needs_query = _fallback_intent_detection(current_message)
+                fallback_subqueries = _fallback_subquery_generation(user_query, conversation_history)
+                
+                # Update conversation history
+                updated_conversation_history = _update_conversation_history(conversation_history, user_query)
                 
                 result = {
-                    "planning_data": {
-                        "needs_database_query": fallback_needs_query,
-                        "reasoning": "Fallback to keyword detection due to parsing error",
-                        "relevant_collections": [],
-                        "query_type": "fallback",
-                        "confidence": 0.3,
-                        "user_message": current_message,
-                        "schema_used": "unified_schema.txt"
-                    },
-                    "trigger_metrics": fallback_needs_query,
-                    "trigger_rag": True,
-                    "needs_metrics": fallback_needs_query,
-                    "needs_rag": True,
-                    # Also set the key values directly in the state for easier access
-                    "needs_database_query": fallback_needs_query,
-                    "confidence": 0.3
+                    "subqueries": fallback_subqueries,
+                    "detected_docs": ["general_documentation"],
+                    "formatted_user_query": user_query,
+                    "db_schema": unified_schema,
+                    "subquery_responses": {},
+                    "retrieved_docs": {},
+                    "final_answer": {},
+                    "conversation_history": updated_conversation_history
                 }
                 
                 logger.info(f"Planner node fallback returning: {result}")
@@ -209,25 +244,20 @@ async def planner_node(state: WorkflowState) -> Dict[str, Any]:
             logger.error(f"Error in LLM planning: {llm_error}")
             
             # Fallback to keyword-based detection
-            fallback_needs_query = _fallback_intent_detection(current_message)
+            fallback_subqueries = _fallback_subquery_generation(user_query, conversation_history)
+            
+            # Update conversation history
+            updated_conversation_history = _update_conversation_history(conversation_history, user_query)
             
             result = {
-                "planning_data": {
-                    "needs_database_query": fallback_needs_query,
-                    "reasoning": "Fallback to keyword detection due to LLM error",
-                    "relevant_collections": [],
-                    "query_type": "fallback",
-                    "confidence": 0.2,
-                    "user_message": current_message,
-                    "schema_used": "unified_schema.txt"
-                },
-                "trigger_metrics": fallback_needs_query,
-                "trigger_rag": True,
-                "needs_metrics": fallback_needs_query,
-                "needs_rag": True,
-                # Also set the key values directly in the state for easier access
-                "needs_database_query": fallback_needs_query,
-                "confidence": 0.2
+                "subqueries": fallback_subqueries,
+                "detected_docs": ["general_documentation"],
+                "formatted_user_query": user_query,
+                "db_schema": unified_schema,
+                "subquery_responses": {},
+                "retrieved_docs": {},
+                "final_answer": {},
+                "conversation_history": updated_conversation_history
             }
             
             logger.info(f"Planner node LLM error fallback returning: {result}")
@@ -235,73 +265,83 @@ async def planner_node(state: WorkflowState) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error in planner node: {str(e)}")
-        result = {
-            "planning_data": {
-                "needs_database_query": False,
-                "reasoning": f"Planner node error: {str(e)}",
-                "relevant_collections": [],
-                "query_type": "error",
-                "confidence": 0.0,
-                "user_message": state.get("current_message", ""),
-                "schema_used": "unified_schema.txt"
-            },
-            "trigger_metrics": False,
-            "trigger_rag": True,
-            "needs_metrics": False,
-            "needs_rag": True,
-            # Also set the key values directly in the state for easier access
-            "needs_database_query": False,
-            "confidence": 0.0
-        }
         
-        logger.info(f"Planner node exception fallback returning: {result}")
+        # Update conversation history even in error case
+        conversation_history = state.get("conversation_history", "")
+        updated_conversation_history = _update_conversation_history(conversation_history, state.get("user_query", ""))
+        
+        result = {
+            "subqueries": {"Database": ["general database query"]},
+            "detected_docs": ["general_documentation"],
+            "formatted_user_query": state.get("user_query", ""),
+            "db_schema": _load_unified_schema(),
+            "subquery_responses": {},
+            "retrieved_docs": {},
+            "final_answer": {},
+            "conversation_history": updated_conversation_history
+        }
         return result
 
 
-def _fallback_intent_detection(message: str) -> bool:
+def _fallback_subquery_generation(user_query: str, conversation_history: str) -> Dict[str, List[str]]:
+    """Fallback method to generate subqueries based on keywords when LLM fails."""
+    query_lower = user_query.lower()
+    subqueries = {}
+    
+    # Check for database-related keywords
+    db_keywords = ["database", "db", "soeid", "employee", "list", "get", "find", "show", "query"]
+    if any(keyword in query_lower for keyword in db_keywords):
+        subqueries["Database"] = [f"Retrieve data for: {user_query}"]
+    
+    # Check for document-related keywords
+    doc_keywords = ["explain", "what", "how", "documentation", "guide", "help"]
+    if any(keyword in query_lower for keyword in doc_keywords):
+        subqueries["General_Documentation"] = [f"Find information about: {user_query}"]
+    
+    # Check conversation history for context
+    if conversation_history and conversation_history.strip():
+        history_lower = conversation_history.lower()
+        # Look for follow-up indicators in conversation history
+        if any(word in history_lower for word in ['more', 'details', 'specific', 'show', 'tell']):
+            # This might be a follow-up question
+            subqueries["General_Documentation"] = [f"Find additional details about: {user_query}"]
+    
+    # If no specific keywords found, default to both
+    if not subqueries:
+        subqueries = {
+            "Database": [f"Retrieve data for: {user_query}"],
+            "General_Documentation": [f"Find information about: {user_query}"]
+        }
+    
+    return subqueries
+
+
+def update_conversation_with_response(state: MultiHopState, final_response: str) -> str:
     """
-    Fallback intent detection using keywords when LLM planning fails.
+    Update conversation history with the final assistant response.
+    
+    This function should be called by the final response node to add the assistant's response
+    to the conversation history.
     
     Args:
-        message: User's message
+        state: The current MultiHopState
+        final_response: The final response from the assistant
         
     Returns:
-        True if database query is likely needed, False otherwise
+        Updated conversation history string
     """
-    message_lower = message.lower()
+    current_history = state.get("conversation_history", "")
+    user_query = state.get("user_query", "")
     
-    # Keywords that indicate database query needs
-    database_keywords = [
-        "application", "applications", "app", "apps", "snapshot", "snapshots",
-        "employee", "employees", "ratio", "ratios", "engineer", "engineers",
-        "enabler", "enablers", "csi", "se", "achievement", "metrics",
-        "management", "segment", "segments", "statistic", "statistics",
-        "performance", "metric", "data", "numbers", "figures",
-        "schema", "database", "collection", "collections", "structure",
-        "table", "tables", "field", "fields", "query", "queries",
-        "find", "search", "get", "show", "list", "count", "how many",
-        "what", "which", "where", "when", "who", "status", "criticality",
-        "sector", "development", "hosting", "model", "organization",
-        "hierarchy", "hierarchical", "reporting", "level", "levels",
-        "tree", "trees", "parent", "child", "tools", "adoption",
-        "headcount", "structure", "organizational"
-    ]
+    # Update history with both user query and assistant response
+    updated_history = _update_conversation_history(current_history, user_query, final_response)
     
-    # Check if any database keywords are present
-    return any(keyword in message_lower for keyword in database_keywords)
+    logger.info(f"Updated conversation history with final response: {len(updated_history)} characters")
+    return updated_history
 
 
 def create_planner_node_tools() -> Dict[str, Any]:
-    """Create tools and utilities for the planner node."""
+    """Create tools for the planner node."""
     return {
-        "supported_analysis": ["intent_detection", "query_planning", "schema_analysis"],
-        "available_planning": [
-            "llm_based_planning",
-            "fallback_keyword_detection"
-        ],
-        "default_config": {
-            "confidence_threshold": 0.5,
-            "schema_file": "schemas/unified_schema.txt",
-            "planning_method": "llm_analysis"
-        }
+        "planner_node": planner_node
     } 

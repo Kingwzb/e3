@@ -1,35 +1,27 @@
-"""Main chat workflow orchestrating RAG and metrics agents using LangGraph."""
+"""Chat workflow management for the AI chat agent."""
 
 from typing import Dict, Any, Optional
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph
 
-from app.models.state import WorkflowState
-from app.workflows.nodes import (
-    conversation_retrieval_node,
-    conversation_save_node,
-    response_generation_node,
-    should_continue_to_response,
-    rag_extraction_node,
-    metrics_extraction_node
-)
-from app.workflows.nodes.orchestration_node import get_workflow_metadata
+from app.models.state import MultiHopState
 from app.workflows.workflow_factory import create_workflow, WorkflowConfig
+from app.workflows.nodes.orchestration_node import get_workflow_metadata
 from app.utils.logging import logger
-
-
-# All node implementations have been moved to separate files in app/workflows/nodes/
 
 
 def create_chat_workflow(config: Optional[WorkflowConfig] = None) -> StateGraph:
     """
-    Create the LangGraph workflow for chat processing using the workflow factory.
+    Create a chat workflow with the specified configuration.
     
     Args:
-        config: Optional workflow configuration. If None, uses default configuration.
-    
+        config: Workflow configuration. If None, uses default configuration.
+        
     Returns:
-        StateGraph workflow (not compiled)
+        Compiled StateGraph workflow
     """
+    if config is None:
+        config = WorkflowConfig()
+    
     return create_workflow(config)
 
 
@@ -59,7 +51,7 @@ class ChatWorkflowManager:
         
         Args:
             message: User's message
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (used as session_id)
             
         Returns:
             Dict containing the response and metadata
@@ -67,15 +59,19 @@ class ChatWorkflowManager:
         try:
             logger.info(f"Starting workflow for conversation: {conversation_id}")
             
-            # Initialize state
-            initial_state = WorkflowState(
-                conversation_id=conversation_id,
-                current_message=message,
-                messages=[],
-                rag_context=None,
-                metrics_data=None,
-                final_response=None,
-                error=None,
+            # Initialize state with MultiHopState
+            initial_state = MultiHopState(
+                request_id=f"req_{conversation_id}_{int(__import__('time').time())}",
+                session_id=conversation_id,  # Use conversation_id as session_id
+                user_query=message,
+                formatted_user_query="",
+                subqueries={},
+                retrieved_docs={},
+                db_schema="",
+                subquery_responses={},
+                final_answer={},
+                detected_docs=[],
+                conversation_history="",
                 conversation_history_limit=self.workflow_config.conversation_history_limit,
                 metrics_context_limit=self.workflow_config.metrics_context_limit,
                 metrics_environment=self.workflow_config.metrics_environment,
@@ -86,7 +82,8 @@ class ChatWorkflowManager:
             final_state = await self.compiled_workflow.ainvoke(initial_state)
             
             # Extract results
-            response = final_state.get("final_response", "I apologize, but I couldn't process your request.")
+            final_answer = final_state.get("final_answer", {})
+            response = final_answer.get("response", "I apologize, but I couldn't process your request.")
             error = final_state.get("error")
             
             # Get comprehensive workflow metadata

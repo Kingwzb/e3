@@ -3,7 +3,7 @@
 from typing import Dict, Any, Optional, List
 from langgraph.graph import StateGraph, END
 
-from app.models.state import WorkflowState
+from app.models.state import MultiHopState
 from app.workflows.nodes import (
     conversation_retrieval_node,
     conversation_save_node,
@@ -60,8 +60,8 @@ def create_workflow(config: Optional[WorkflowConfig] = None) -> StateGraph:
     
     logger.info(f"Creating workflow: {config.workflow_name}")
     
-    # Create state graph
-    workflow = StateGraph(WorkflowState)
+    # Create state graph with MultiHopState
+    workflow = StateGraph(MultiHopState)
     
     # Always add response generation node
     workflow.add_node("response_generation", response_generation_node)
