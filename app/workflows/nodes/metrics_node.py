@@ -1,144 +1,93 @@
-"""Metrics extraction node for LangGraph workflow using LangChain tools."""
+"""Metrics extraction node for LangGraph workflow using dynamic database tool."""
 
 import json
+import os
 from typing import Dict, Any, List, Optional
 from app.models.state import WorkflowState
-from app.tools.ee_productivities_tools import create_ee_productivities_tools
+from app.tools.dynamic_db_tool import create_dynamic_db_tool
 from app.core.llm import llm_client
 
 from app.utils.logging import logger
 
 
-def _clean_schema_for_vertex_ai(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Clean JSON schema to be compatible with Vertex AI by removing NULL values and fixing anyOf issues.
-    
-    Vertex AI's protobuf parser doesn't handle "NULL" string values well,
-    and has strict requirements for anyOf schemas.
-    """
-    if not isinstance(schema, dict):
+def _load_unified_schema() -> str:
+    """Load the unified schema from file."""
+    try:
+        schema_path = "schemas/unified_schema.txt"
+        with open(schema_path, "r") as f:
+            schema = f.read()
+        logger.info(f"Loaded unified schema from {schema_path}")
         return schema
-    
-    cleaned = {}
-    for key, value in schema.items():
-        if key == "anyOf" and isinstance(value, list):
-            # Filter out null types from anyOf arrays
-            cleaned_any_of = []
-            for item in value:
-                if isinstance(item, dict) and item.get("type") != "null":
-                    cleaned_any_of.append(_clean_schema_for_vertex_ai(item))
-            if cleaned_any_of:
-                # If we have anyOf, it should be the only field in this schema object
-                if len(cleaned_any_of) == 1:
-                    # If only one type remains, flatten it
-                    cleaned.update(cleaned_any_of[0])
-                else:
-                    cleaned[key] = cleaned_any_of
-        elif key == "type" and value == "null":
-            # Skip null types
-            continue
-        elif key == "properties" and isinstance(value, dict):
-            # Clean properties recursively
-            cleaned_properties = {}
-            for prop_name, prop_schema in value.items():
-                cleaned_prop = _clean_schema_for_vertex_ai(prop_schema)
-                if cleaned_prop:  # Only add if not empty
-                    cleaned_properties[prop_name] = cleaned_prop
-            if cleaned_properties:
-                cleaned[key] = cleaned_properties
-        elif isinstance(value, dict):
-            cleaned[key] = _clean_schema_for_vertex_ai(value)
-        elif isinstance(value, list):
-            cleaned[key] = [_clean_schema_for_vertex_ai(item) for item in value]
-        else:
-            cleaned[key] = value
-    
-    return cleaned
+    except FileNotFoundError:
+        logger.error(f"Unified schema file not found: {schema_path}")
+        raise FileNotFoundError(f"Unified schema file not found: {schema_path}")
+    except Exception as e:
+        logger.error(f"Failed to load unified schema: {e}")
+        raise
 
 
-def _select_most_appropriate_tool(message: str, tools: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _should_extract_metrics(state: WorkflowState) -> bool:
     """
-    Select the most appropriate tool based on the user's message content.
+    Determine if metrics extraction is needed based on planner node decision.
     
     Args:
-        message: User's message
-        tools: List of available tools
+        state: Workflow state containing planning data
         
     Returns:
-        The most appropriate tool or None if no specific tool is needed
+        True if metrics extraction is needed, False otherwise
     """
-    message_lower = message.lower()
+    # Check for trigger_metrics at top level (from planner node)
+    if state.get("trigger_metrics", False):
+        logger.info("Metrics extraction triggered by trigger_metrics=True")
+        return True
     
-    # Define keyword mappings for each tool
-    tool_keywords = {
-        "query_application_snapshots": [
-            "application", "applications", "app", "apps", "snapshot", "snapshots",
-            "status", "criticality", "sector", "development", "hosting", "model"
-        ],
-        "query_employee_ratios": [
-            "employee", "employees", "ratio", "ratios", "engineer", "engineers",
-            "tools", "adoption", "count", "headcount"
-        ],
-        "query_employee_trees": [
-            "tree", "trees", "hierarchy", "hierarchical", "organization", "organizational",
-            "structure", "reporting", "level", "levels"
-        ],
-        "query_enablers": [
-            "enabler", "enablers", "csi", "se", "achievement", "metrics"
-        ],
-        "query_management_segments": [
-            "management", "segment", "segments", "parent", "child"
-        ],
-        "query_statistics": [
-            "statistic", "statistics", "performance", "metric", "metrics",
-            "data", "numbers", "figures"
-        ],
-        "get_database_schema": [
-            "schema", "database", "collection", "collections", "structure",
-            "table", "tables", "field", "fields"
-        ],
-        "get_field_paths": [
-            "field", "fields", "path", "paths", "structure", "schema", "available",
-            "what", "which", "show", "list", "explore", "discover"
-        ],
-        "get_field_values": [
-            "value", "values", "unique", "distinct", "possible", "available",
-            "what", "which", "show", "list", "options", "choices"
-        ]
-    }
+    # Check for needs_metrics at top level (alternative field)
+    if state.get("needs_metrics", False):
+        logger.info("Metrics extraction triggered by needs_metrics=True")
+        return True
     
-    # Score each tool based on keyword matches
-    tool_scores = {}
-    for tool in tools:
-        tool_name = tool["function"]["name"]
-        if tool_name in tool_keywords:
-            score = 0
-            for keyword in tool_keywords[tool_name]:
-                if keyword in message_lower:
-                    score += 1
-            if score > 0:
-                tool_scores[tool_name] = score
+    # Fallback to planning_data.trigger_metrics if not at top level
+    planning_data = state.get("planning_data", {})
+    if planning_data.get("trigger_metrics", False) or planning_data.get("needs_metrics", False):
+        logger.info("Metrics extraction triggered by planning_data")
+        return True
     
-    # Return the tool with the highest score, or None if no matches
-    if tool_scores:
-        best_tool_name = max(tool_scores, key=tool_scores.get)
-        return next(tool for tool in tools if tool["function"]["name"] == best_tool_name)
+    # Additional fallback: check direct state values
+    if state.get("needs_database_query", False) and state.get("confidence", 0.0) > 0.5:
+        logger.info("Metrics extraction triggered by direct state values")
+        return True
     
-    return None
+    # Final fallback: check planning_data.needs_database_query
+    if planning_data.get("needs_database_query", False) and planning_data.get("confidence", 0.0) > 0.5:
+        logger.info("Metrics extraction triggered by planning_data.needs_database_query")
+        return True
+    
+    # Last resort: check message keywords
+    current_message = state.get("current_message", "").lower()
+    db_keywords = ["database", "db", "query", "soeid", "employee", "list", "get", "find", "show"]
+    has_db_keywords = any(keyword in current_message for keyword in db_keywords)
+    
+    if has_db_keywords:
+        logger.info(f"Metrics extraction triggered by message keywords: {current_message}")
+        return True
+    
+    logger.info("No metrics extraction required - all checks failed")
+    return False
 
 
 async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
     """
-    LangGraph node that performs data extraction using ee-productivities tools.
+    LangGraph node that performs data extraction using dynamic database tool.
     
     This node:
-    1. Uses LLM to determine if data from the ee-productivities database is needed
-    2. If needed, calls appropriate ee-productivities tools
-    3. Returns extracted data
+    1. Determines if the user's message requires database querying
+    2. If needed, uses the dynamic database tool to generate and execute queries
+    3. Returns extracted data in a structured format
     
     Configuration:
-    - Uses ee-productivities database tools for data extraction
-    - Supports queries for applications, employees, enablers, statistics, and organizational data
+    - Uses dynamic database tool for flexible query generation
+    - Supports natural language queries across all collections
+    - Handles complex queries with joins and aggregations
     """
     try:
         logger.info(f"Metrics node processing message for conversation: {state['conversation_id']}")
@@ -146,207 +95,253 @@ async def metrics_extraction_node(state: WorkflowState) -> Dict[str, Any]:
         current_message = state["current_message"]
         conversation_history = state.get("messages", [])
         
-        # Create ee-productivities tools
-        ee_tools = create_ee_productivities_tools()
-        tool_map = {tool.name: tool for tool in ee_tools}
+        # Check if metrics extraction is needed based on planner decision
+        if not _should_extract_metrics(state):
+            logger.info("No metrics extraction required based on planner decision")
+            return {"metrics_data": None}
         
-        logger.debug(f"Using ee-productivities tools: {[tool.name for tool in ee_tools]}")
+        # Load unified schema
+        unified_schema = _load_unified_schema()
         
-        # Prepare messages for LLM
-        system_message = """You are a data extraction agent for the ee-productivities database. Your job is to extract data from the database using the available tools.
-
-IMPORTANT: You MUST use the available tools to extract data when the user asks about:
-- Applications, snapshots, status, criticality, sector, development model
-- Employees, ratios, organizational hierarchy, engineer data
-- Enablers, CSI snapshots, SE metrics
-- Management segments, organizational structures
-- Statistics, performance metrics, data
-- Database schema, collections, structure
-- Field paths and available fields in collections
-- Unique values for specific fields
-
-Available tools and their capabilities:
-- query_application_snapshots: Query application snapshots (status, criticality, sector, development model, etc.)
-- query_employee_ratios: Query employee ratios and engineer data
-- query_employee_trees: Query organizational hierarchy and employee structures
-- query_enablers: Query enabler CSI snapshots and SE metrics
-- query_management_segments: Query management segment trees
-- query_statistics: Query performance metrics and statistics
-- get_database_schema: Get database schema information
-- get_field_paths: Get available field paths in a collection (use when user asks about fields, structure, or what data is available)
-- get_field_values: Get unique values for a specific field path (use when user asks about possible values, options, or distinct values)
-
-DO NOT respond with generic messages. If the user asks about any of the above topics, you MUST call the appropriate tool to get the data. Only respond with "No data required" if the query is completely unrelated to the database."""
-
-        messages = [
-            {"role": "system", "content": system_message},
-        ]
+        # Create dynamic database tool with LLM client
+        logger.info(f"DEBUG: About to create dynamic database tool")
+        logger.info(f"DEBUG: llm_client type: {type(llm_client)}")
         
-        # Add conversation history (use configurable limit)
-        # Check for metrics-specific context limit, otherwise use general history limit
-        metrics_context_limit = state.get("metrics_context_limit") 
-        if metrics_context_limit is None:
-            # Use the general conversation history limit, but cap at 8 for LLM efficiency
-            general_limit = state.get("conversation_history_limit", 10)
-            metrics_context_limit = min(general_limit, 8) if general_limit > 0 else 5
+        try:
+            dynamic_tool = create_dynamic_db_tool(llm_client=llm_client)
+            logger.info(f"DEBUG: Dynamic database tool created successfully")
+            logger.info(f"DEBUG: dynamic_tool type: {type(dynamic_tool)}")
+        except Exception as tool_creation_error:
+            logger.error(f"DEBUG: Error creating dynamic database tool: {tool_creation_error}")
+            logger.error(f"DEBUG: Tool creation error type: {type(tool_creation_error)}")
+            import traceback
+            logger.error(f"DEBUG: Tool creation traceback: {traceback.format_exc()}")
+            raise
         
-        logger.debug(f"Using {metrics_context_limit} messages for metrics context (from {len(conversation_history)} total)")
+        logger.info(f"Using dynamic database tool for message: {current_message[:100]}...")
         
-        for msg in conversation_history[-metrics_context_limit:]:
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        
-        # Add current message
-        messages.append({"role": "user", "content": current_message})
-        
-        # Convert ee-productivities tools to OpenAI function format
-        tools_for_llm = []
-        for tool in ee_tools:
-            # Get the raw schema and clean it for Vertex AI compatibility
-            raw_schema = tool.args_schema.model_json_schema()
-            
-            # Clean the schema to remove NULL values that cause Vertex AI issues
-            cleaned_schema = _clean_schema_for_vertex_ai(raw_schema)
-            
-            tool_schema = {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": cleaned_schema
-                }
-            }
-            tools_for_llm.append(tool_schema)
-        
-        # Select the most appropriate tool based on the query content
-        selected_tool = _select_most_appropriate_tool(current_message, tools_for_llm)
-        
-        # For field-related queries, include both field tools and relevant data tools
-        message_lower = current_message.lower()
-        field_keywords = ["field", "fields", "path", "paths", "structure", "schema", "available", "what", "which", "show", "list", "explore", "discover", "value", "values", "unique", "distinct", "possible", "options", "choices"]
-        
-        is_field_query = any(keyword in message_lower for keyword in field_keywords)
-        
-        if is_field_query:
-            # For field queries, provide both field tools to let LLM choose
-            field_tools = [tool for tool in tools_for_llm if tool["function"]["name"] in ["get_field_paths", "get_field_values"]]
-            if field_tools:
-                # Due to Vertex AI limitation, we need to choose one tool
-                # Prioritize get_field_paths for structure queries, get_field_values for value queries
-                if any(word in message_lower for word in ["value", "values", "unique", "distinct", "possible", "options", "choices"]):
-                    # User is asking for specific values
-                    value_tool = [tool for tool in field_tools if tool["function"]["name"] == "get_field_values"]
-                    tools_for_llm = value_tool if value_tool else field_tools[:1]
+        # Execute the dynamic database query
+        try:
+            logger.info(f"DEBUG: About to prepare conversation context for better query generation, state: {state}, conversation_history: {conversation_history}")
+            # Prepare conversation context for better query generation
+            context_messages = []
+            if conversation_history:
+                # Use last few messages for context
+                context_limit_raw = state.get("metrics_context_limit", 3)
+                logger.info(f"DEBUG: context_limit_raw: {context_limit_raw}, type: {type(context_limit_raw)}")
+                
+                # Ensure context_limit is a valid integer
+                if context_limit_raw is None:
+                    context_limit = 3
+                    logger.info(f"DEBUG: context_limit_raw is None, using default 3")
+                elif not isinstance(context_limit_raw, int):
+                    try:
+                        context_limit = int(context_limit_raw)
+                        logger.info(f"DEBUG: Converted context_limit_raw to int: {context_limit}")
+                    except (ValueError, TypeError):
+                        context_limit = 3
+                        logger.info(f"DEBUG: Could not convert context_limit_raw to int, using default 3")
                 else:
-                    # User is asking for field structure/available fields
-                    path_tool = [tool for tool in field_tools if tool["function"]["name"] == "get_field_paths"]
-                    tools_for_llm = path_tool if path_tool else field_tools[:1]
-                logger.info(f"Field query detected. Using field tool: {[tool['function']['name'] for tool in tools_for_llm]}")
-            else:
-                # Fallback to selected tool if no field tools available
-                tools_for_llm = [selected_tool] if selected_tool else tools_for_llm[:1]
-                logger.info(f"Field query detected but no field tools available. Using: {[tool['function']['name'] for tool in tools_for_llm]}")
-        elif selected_tool:
-            tools_for_llm = [selected_tool]
-            logger.info(f"Selected tool based on query: {selected_tool['function']['name']}")
-        else:
-            # Vertex AI limitation: use only one tool
-            tools_for_llm = tools_for_llm[:1]
-            logger.info(f"No specific tool selected, using first available tool: {[tool['function']['name'] for tool in tools_for_llm]}")
-        
-        logger.debug(f"Created {len(tools_for_llm)} ee-productivities tools for LLM")
-        logger.info(f"Available tools for LLM: {[tool['function']['name'] for tool in tools_for_llm]}")
-        
-        # Call LLM with tools
-        logger.info(f"Calling LLM with {len(tools_for_llm)} tools for message: {current_message[:100]}...")
-        llm_response = await llm_client.generate_response(
-            messages=messages,
-            tools=tools_for_llm,
-            temperature=0.3
-        )
-        
-        logger.info(f"LLM response received. Has tool calls: {bool(llm_response.get('tool_calls'))}")
-        if llm_response.get("tool_calls"):
-            logger.info(f"Tool calls found: {len(llm_response['tool_calls'])}")
-        else:
-            logger.info(f"No tool calls. LLM response content: {llm_response.get('content', 'No content')[:200]}...")
-        
-        # Process tool calls if any
-        metrics_data = None
-        if llm_response.get("tool_calls"):
-            metrics_data = {}
+                    context_limit = context_limit_raw
+                    logger.info(f"DEBUG: Using context_limit: {context_limit}")
+                
+                logger.info(f"DEBUG: Final context_limit: {context_limit}, type: {type(context_limit)}")
+                for msg in conversation_history[-context_limit:]:
+                    context_messages.append(f"{msg['role']}: {msg['content']}")
             
-            # Execute each tool call using ee-productivities tools
-            for tool_call in llm_response["tool_calls"]:
-                function_name = tool_call["function"]["name"]
-                function_args = tool_call["function"]["arguments"]
+            # Create enhanced prompt with context
+            enhanced_prompt = current_message
+            if context_messages:
+                context_text = "\n".join(context_messages)
+                enhanced_prompt = f"Context:\n{context_text}\n\nCurrent request: {current_message}"
+            logger.info(f"DEBUG: About to call dynamic_tool._arun")
+            logger.info(f"DEBUG: enhanced_prompt length: {len(enhanced_prompt)}")
+            logger.info(f"DEBUG: unified_schema length: {len(unified_schema)}")
+            
+            # Check state values that might be None
+            metrics_limit_raw = state.get("metrics_limit")
+            logger.info(f"DEBUG: metrics_limit_raw: {metrics_limit_raw}, type: {type(metrics_limit_raw)}")
+            metrics_limit = state.get("metrics_limit", 100)
+            logger.info(f"DEBUG: metrics_limit: {metrics_limit}, type: {type(metrics_limit)}")
+            
+            logger.info(f"DEBUG: dynamic_tool type: {type(dynamic_tool)}")
+            
+            try:
                 
-                logger.info(f"Executing ee-productivities tool: {function_name} with args: {function_args}")
+                logger.info(f"DEBUG: Calling dynamic_tool._arun with parameters:")
                 
+                # Debug enhanced_prompt safely
                 try:
-                    # Find the corresponding ee-productivities tool
-                    ee_tool = tool_map.get(function_name)
+                    prompt_preview = enhanced_prompt[:100] if enhanced_prompt else "None"
+                    logger.info(f"DEBUG: - user_prompt: {prompt_preview}...")
+                except Exception as e:
+                    logger.error(f"DEBUG: Error getting prompt preview: {e}")
+                    logger.info(f"DEBUG: - user_prompt: [ERROR]")
+                
+                # Debug unified_schema safely
+                try:
+                    schema_length = len(unified_schema) if unified_schema else "None"
+                    logger.info(f"DEBUG: - unified_schema: {schema_length} chars")
+                except Exception as e:
+                    logger.error(f"DEBUG: Error getting schema length: {e}")
+                    logger.info(f"DEBUG: - unified_schema: [ERROR]")
+                
+                # Debug limit safely
+                try:
+                    limit_value = state.get('metrics_limit', 100)
+                    logger.info(f"DEBUG: - limit: {limit_value}")
+                except Exception as e:
+                    logger.error(f"DEBUG: Error getting limit: {e}")
+                    logger.info(f"DEBUG: - limit: [ERROR]")
+                
+                logger.info(f"DEBUG: - include_aggregation: True")
+                logger.info(f"DEBUG: - join_strategy: lookup")
+                
+                logger.info(f"DEBUG: About to call await dynamic_tool._arun")
+                logger.info(f"DEBUG: dynamic_tool._arun method: {dynamic_tool._arun}")
+                logger.info(f"DEBUG: dynamic_tool._arun type: {type(dynamic_tool._arun)}")
+                
+                # Check if the method is callable
+                if not callable(dynamic_tool._arun):
+                    logger.error(f"DEBUG: dynamic_tool._arun is not callable!")
+                    raise RuntimeError("dynamic_tool._arun is not callable")
+                
+                # Prepare the limit parameter carefully
+                try:
+                    limit_param = state.get("metrics_limit", 100)
+                    logger.info(f"DEBUG: limit_param: {limit_param}, type: {type(limit_param)}")
                     
-                    if ee_tool:
-                        # Execute the ee-productivities tool
-                        if isinstance(function_args, str):
-                            function_args = json.loads(function_args)
-                        
-                        logger.info(f"Tool '{function_name}' found and executing with args: {function_args}")
-                        result = await ee_tool._arun(**function_args)
-                        
-                        metrics_data[function_name] = {
-                            "result": result,
-                            "arguments": function_args,
-                            "tool_type": "ee_productivities",
+                    # Ensure limit is a valid integer
+                    if limit_param is None:
+                        logger.warning(f"DEBUG: limit_param is None, using default 100")
+                        limit_param = 100
+                    elif not isinstance(limit_param, int):
+                        logger.warning(f"DEBUG: limit_param is not int, converting from {type(limit_param)}")
+                        try:
+                            limit_param = int(limit_param)
+                        except (ValueError, TypeError):
+                            logger.warning(f"DEBUG: Could not convert limit_param to int, using default 100")
+                            limit_param = 100
+                    
+                    logger.info(f"DEBUG: Final limit_param: {limit_param}, type: {type(limit_param)}")
+                except Exception as e:
+                    logger.error(f"DEBUG: Error preparing limit_param: {e}")
+                    logger.error(f"DEBUG: Error type: {type(e)}")
+                    import traceback
+                    logger.error(f"DEBUG: Limit preparation traceback: {traceback.format_exc()}")
+                    limit_param = 100  # Use safe default
+                
+                # Check other parameters
+                try:
+                    logger.info(f"DEBUG: enhanced_prompt type: {type(enhanced_prompt)}")
+                    logger.info(f"DEBUG: enhanced_prompt is None: {enhanced_prompt is None}")
+                    logger.info(f"DEBUG: unified_schema type: {type(unified_schema)}")
+                    logger.info(f"DEBUG: unified_schema is None: {unified_schema is None}")
+                    
+                    # Ensure parameters are not None
+                    if enhanced_prompt is None:
+                        logger.error(f"DEBUG: enhanced_prompt is None!")
+                        enhanced_prompt = current_message
+                    
+                    if unified_schema is None:
+                        logger.error(f"DEBUG: unified_schema is None!")
+                        raise ValueError("unified_schema is None")
+                    
+                    logger.info(f"DEBUG: About to call _arun with validated parameters")
+                except Exception as e:
+                    logger.error(f"DEBUG: Error validating parameters: {e}")
+                    logger.error(f"DEBUG: Error type: {type(e)}")
+                    import traceback
+                    logger.error(f"DEBUG: Parameter validation traceback: {traceback.format_exc()}")
+                    raise
+                
+                result = await dynamic_tool._arun(
+                    user_prompt=enhanced_prompt,
+                    unified_schema=unified_schema,
+                    limit=limit_param,
+                    include_aggregation=True,
+                    join_strategy="lookup"
+                )
+                
+                logger.info(f"DEBUG: dynamic_tool._arun completed successfully")
+                logger.info(f"DEBUG: result type: {type(result)}")
+                logger.info(f"DEBUG: result length: {len(result) if isinstance(result, str) else 'Not a string'}")
+                
+            except Exception as arun_error:
+                logger.error(f"DEBUG: Error in dynamic_tool._arun call: {arun_error}")
+                logger.error(f"DEBUG: Error type: {type(arun_error)}")
+                import traceback
+                logger.error(f"DEBUG: _arun call traceback: {traceback.format_exc()}")
+                raise
+            
+            # Parse the result
+            if result.startswith("Error:"):
+                logger.error(f"Dynamic database tool error: {result}")
+                metrics_data = {
+                    "dynamic_db_query": {
+                        "error": result,
+                        "user_prompt": current_message,
+                        "tool_type": "dynamic_db"
+                    }
+                }
+            else:
+                # Parse the JSON result
+                try:
+                    parsed_result = json.loads(result)
+                    metrics_data = {
+                        "dynamic_db_query": {
+                            "result": parsed_result,
+                            "user_prompt": current_message,
+                            "tool_type": "dynamic_db",
                             "config": {
                                 "database": "ee-productivities",
-                                "tool_name": function_name
+                                "tool_name": "dynamic_db_query",
+                                "schema_used": "unified_schema.txt"
                             }
                         }
-                        
-                        logger.info(f"Successfully executed ee-productivities tool {function_name}")
-                    else:
-                        available_tools = list(tool_map.keys())
-                        logger.error(f"Tool '{function_name}' not found in available tools: {available_tools}")
-                        logger.error(f"LLM attempted to call undefined tool: {function_name}")
-                        metrics_data[function_name] = {
-                            "error": f"Unknown tool: {function_name}",
-                            "arguments": function_args,
-                            "available_tools": available_tools
-                        }
-                    
-                except Exception as tool_error:
-                    # Enhanced exception logging with traceback and input parameters
-                    import traceback
-                    logger.error(f"Error executing ee-productivities tool at line {tool_error.__traceback__.tb_lineno if tool_error.__traceback__ else 'unknown'}: {str(tool_error)}")
-                    logger.error(f"Input parameters - function_name: {function_name}, function_args: {function_args}")
-                    logger.error(f"Full traceback: {traceback.format_exc()}")
-                    metrics_data[function_name] = {
-                        "error": str(tool_error),
-                        "arguments": function_args,
-                        "tool_type": "ee_productivities"
                     }
+                    logger.info(f"Successfully executed dynamic database query")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse dynamic database result: {e}")
+                    metrics_data = {
+                        "dynamic_db_query": {
+                            "error": f"Failed to parse result: {str(e)}",
+                            "raw_result": result,
+                            "user_prompt": current_message,
+                            "tool_type": "dynamic_db"
+                        }
+                    }
+            
+        except Exception as tool_error:
+            logger.error(f"Error executing dynamic database tool: {tool_error}")
+            metrics_data = {
+                "dynamic_db_query": {
+                    "error": str(tool_error),
+                    "user_prompt": current_message,
+                    "tool_type": "dynamic_db"
+                }
+            }
         
         # Return only the keys this node modifies
         result = {"metrics_data": metrics_data}
         
-        if metrics_data:
-            logger.info(f"Metrics extraction completed. Retrieved {len(metrics_data)} tool results")
+        if metrics_data and "error" not in metrics_data.get("dynamic_db_query", {}):
+            logger.info(f"Metrics extraction completed successfully")
         else:
-            logger.info("No metrics extraction required for this query")
+            logger.info("Metrics extraction completed with errors")
         
         return result
         
     except Exception as e:
-        # Enhanced exception logging with traceback and input parameters
-        import traceback
-        logger.error(f"Error in metrics extraction node at line {e.__traceback__.tb_lineno if e.__traceback__ else 'unknown'}: {str(e)}")
-        logger.error(f"Input parameters - conversation_id: {state.get('conversation_id', 'unknown')}, current_message: {state.get('current_message', 'unknown')[:100]}...")
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        # Return only the keys this node modifies, even in error case
+        logger.error(f"Error in metrics extraction node: {str(e)}")
         return {
-            "error": f"Metrics extraction failed: {str(e)}",
-            "metrics_data": None
+            "metrics_data": {
+                "dynamic_db_query": {
+                    "error": f"Metrics extraction failed: {str(e)}",
+                    "user_prompt": state.get("current_message", ""),
+                    "tool_type": "dynamic_db"
+                }
+            }
         }
 
 
@@ -355,18 +350,11 @@ def create_metrics_node_tools() -> Dict[str, Any]:
     return {
         "supported_databases": ["ee-productivities"],
         "available_tools": [
-            "query_application_snapshots",
-            "query_employee_ratios", 
-            "query_employee_trees",
-            "query_enablers",
-            "query_management_segments",
-            "query_statistics",
-            "get_database_schema",
-            "get_field_paths",
-            "get_field_values"
+            "dynamic_db_query"
         ],
         "default_config": {
             "database": "ee-productivities",
-            "tool_type": "ee_productivities"
+            "tool_type": "dynamic_db",
+            "schema_file": "schemas/unified_schema.txt"
         }
     } 

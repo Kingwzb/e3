@@ -26,6 +26,13 @@ async def response_generation_node(state: WorkflowState) -> WorkflowState:
         rag_context = state.get("rag_context", "")
         metrics_data = state.get("metrics_data", {})
         
+        # Debug the data we're working with
+        logger.info(f"DEBUG: Response generation - current_message: {current_message}")
+        logger.info(f"DEBUG: Response generation - rag_context type: {type(rag_context)}, length: {len(rag_context) if rag_context else 0}")
+        logger.info(f"DEBUG: Response generation - metrics_data type: {type(metrics_data)}")
+        logger.info(f"DEBUG: Response generation - metrics_data keys: {list(metrics_data.keys()) if isinstance(metrics_data, dict) else 'Not a dict'}")
+        logger.info(f"DEBUG: Response generation - metrics_data content: {metrics_data}")
+        
         # Build the system message
         system_message = """You are an AI assistant that provides helpful responses based on conversation history, knowledge base context, and metrics data.
 
@@ -51,19 +58,31 @@ Your response should be natural and conversational while being informative and h
             messages.append({"role": "system", "content": context_message})
         
         if metrics_data:
+            logger.info(f"DEBUG: Response generation - Processing metrics_data")
             # Format metrics data for the LLM
             metrics_summary = "Available Metrics Data:\n"
             for tool_name, tool_result in metrics_data.items():
+                logger.info(f"DEBUG: Response generation - Processing tool: {tool_name}")
+                logger.info(f"DEBUG: Response generation - Tool result type: {type(tool_result)}")
+                logger.info(f"DEBUG: Response generation - Tool result keys: {list(tool_result.keys()) if isinstance(tool_result, dict) else 'Not a dict'}")
+                
                 if "result" in tool_result:
                     # The result is a string from LangChain tools, not a dict
-                    metrics_summary += f"\n{tool_name} Results:\n{tool_result['result']}\n"
+                    result_content = tool_result['result']
+                    logger.info(f"DEBUG: Response generation - Adding result content, length: {len(result_content) if result_content else 0}")
+                    metrics_summary += f"\n{tool_name} Results:\n{result_content}\n"
                 elif "error" in tool_result:
+                    logger.info(f"DEBUG: Response generation - Adding error content")
                     metrics_summary += f"\n{tool_name}: Error - {tool_result['error']}\n"
                 else:
                     # Fallback: show the whole tool_result
+                    logger.info(f"DEBUG: Response generation - Adding fallback content")
                     metrics_summary += f"\n{tool_name}:\n{json.dumps(tool_result, indent=2)}\n"
             
+            logger.info(f"DEBUG: Response generation - Final metrics_summary length: {len(metrics_summary)}")
             messages.append({"role": "system", "content": metrics_summary})
+        else:
+            logger.info(f"DEBUG: Response generation - No metrics_data available")
         
         # Add current user message
         messages.append({"role": "user", "content": current_message})

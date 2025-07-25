@@ -9,8 +9,10 @@ from app.workflows.nodes import (
     conversation_save_node,
     response_generation_node,
     should_continue_to_response,
+    should_route_to_metrics,
     rag_extraction_node,
-    metrics_extraction_node
+    metrics_extraction_node,
+    planner_node
 )
 from app.utils.logging import logger
 
@@ -69,8 +71,11 @@ def create_workflow(config: Optional[WorkflowConfig] = None) -> StateGraph:
         workflow.add_node("retrieve_history", conversation_retrieval_node)
         workflow.set_entry_point("retrieve_history")
     else:
-        # If no conversation history, start with parallel processing
-        workflow.set_entry_point("response_generation")
+        # If no conversation history, start with planner node
+        workflow.set_entry_point("planner")
+    
+    # Always add planner node for intelligent routing
+    workflow.add_node("planner", planner_node)
     
     if config.enable_rag:
         workflow.add_node("rag_extraction", rag_extraction_node)
@@ -92,28 +97,44 @@ def _add_workflow_edges(workflow: StateGraph, config: WorkflowConfig) -> None:
     """Add edges to the workflow based on configuration."""
     
     if config.enable_conversation_history:
-        # Start from conversation retrieval
-        if config.parallel_processing and (config.enable_rag or config.enable_metrics):
-            # Parallel processing from history retrieval
-            if config.enable_rag:
-                workflow.add_edge("retrieve_history", "rag_extraction")
-            if config.enable_metrics:
-                workflow.add_edge("retrieve_history", "metrics_extraction")
-            
-            # Both extraction nodes go to response generation
-            if config.enable_rag:
-                workflow.add_edge("rag_extraction", "response_generation")
-            if config.enable_metrics:
-                workflow.add_edge("metrics_extraction", "response_generation")
-            
-            # If only one extraction type is enabled, need direct path
-            if not config.enable_rag and config.enable_metrics:
-                workflow.add_edge("retrieve_history", "response_generation")
-            elif config.enable_rag and not config.enable_metrics:
-                workflow.add_edge("retrieve_history", "response_generation")
-        else:
-            # Sequential processing
-            workflow.add_edge("retrieve_history", "response_generation")
+        # Start from conversation retrieval, then go to planner
+        workflow.add_edge("retrieve_history", "planner")
+    else:
+        # If no conversation history, planner is the entry point
+        pass
+    
+    # Planner routes to metrics, RAG, or both based on its decision
+    if config.enable_rag and config.enable_metrics:
+        # Both enabled - use conditional routing from planner
+        workflow.add_conditional_edges(
+            "planner",
+            should_route_to_metrics,
+            {
+                "metrics_extraction": "metrics_extraction",
+                "rag_extraction": "rag_extraction",
+                "both": "metrics_extraction"  # Start with metrics, then RAG
+            }
+        )
+        
+        # Add edge from metrics to RAG for "both" case
+        workflow.add_edge("metrics_extraction", "rag_extraction")
+        
+        # Only RAG goes to response generation (since it's the last in sequence)
+        workflow.add_edge("rag_extraction", "response_generation")
+        
+    elif config.enable_metrics and not config.enable_rag:
+        # Only metrics enabled
+        workflow.add_edge("planner", "metrics_extraction")
+        workflow.add_edge("metrics_extraction", "response_generation")
+        
+    elif config.enable_rag and not config.enable_metrics:
+        # Only RAG enabled
+        workflow.add_edge("planner", "rag_extraction")
+        workflow.add_edge("rag_extraction", "response_generation")
+        
+    else:
+        # Neither enabled - go directly to response generation
+        workflow.add_edge("planner", "response_generation")
     
     # Handle response generation to save/end
     if config.enable_conversation_save:

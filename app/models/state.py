@@ -16,6 +16,15 @@ class WorkflowState(TypedDict):
     final_response: Optional[str]
     error: Optional[str]
     
+    # Planning and routing fields (set by planner node)
+    trigger_metrics: Optional[bool]
+    trigger_rag: Optional[bool]
+    needs_metrics: Optional[bool]
+    needs_rag: Optional[bool]
+    needs_database_query: Optional[bool]
+    confidence: Optional[float]
+    planning_data: Optional[Dict[str, Any]]
+    
     # Configuration parameters (optional)
     conversation_history_limit: Optional[int]  # Number of previous messages to retrieve
     metrics_context_limit: Optional[int]  # Number of messages to use for metrics context
